@@ -112,7 +112,7 @@ pub fn continuation_token(c: &Value) -> Option<String> {
 }
 
 /// TV client tiles (home / subscriptions feeds of a signed-in account).
-fn parse_tile(t: &Value) -> Option<VideoItem> {
+pub(crate) fn parse_tile(t: &Value) -> Option<VideoItem> {
     let ctype = t.get("contentType").and_then(Value::as_str).unwrap_or("");
     if !ctype.is_empty() && ctype != "TILE_CONTENT_TYPE_VIDEO" {
         return None;
@@ -571,15 +571,51 @@ pub fn shorts_feed(token: Option<&str>) -> Result<(Vec<VideoItem>, Option<String
 
 pub fn suggestions(query: &str) -> Result<Vec<String>> {
     let (hl, gl) = region();
-    let url = format!(
-        "https://suggestqueries-clients6.youtube.com/complete/search?client=firefox&ds=yt&hl={hl}&gl={gl}&q={}",
-        http::urlencode(query)
-    );
-    let v = http::get_json(&url)?;
+    let q = http::urlencode(query);
+    // the endpoint youtube.com itself uses; answers with JSONP
+    let yt = http::get_text(&format!(
+        "https://suggestqueries-clients6.youtube.com/complete/search?client=youtube&ds=yt&hl={hl}&gl={gl}&q={q}"
+    ))
+    .ok()
+    .and_then(|t| parse_suggestions_jsonp(&t));
+    if let Some(v) = yt.filter(|v| !v.is_empty()) {
+        return Ok(v);
+    }
+    let v = http::get_json(&format!("https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&hl={hl}&gl={gl}&q={q}"))?;
     Ok(v.get(1)
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
         .unwrap_or_default())
+}
+
+/// `window.google.ac.h(["q",[["sugg",0,[..]],..],{..}])` -> the suggestion strings.
+fn parse_suggestions_jsonp(t: &str) -> Option<Vec<String>> {
+    let start = t.find('(')? + 1;
+    let end = t.rfind(')')?;
+    let v: Value = serde_json::from_str(t.get(start..end)?).ok()?;
+    Some(
+        v.get(1)?
+            .as_array()?
+            .iter()
+            .filter_map(|e| e.get(0).and_then(Value::as_str).or_else(|| e.as_str()).map(str::to_string))
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod suggest_tests {
+    #[test]
+    fn jsonp() {
+        let t = r#"window.google.ac.h(["lofi",[["lofi",0,[512]],["lofi girl",0,[512,433]]],{"k":1}])"#;
+        assert_eq!(super::parse_suggestions_jsonp(t).unwrap(), vec!["lofi", "lofi girl"]);
+    }
+
+    #[test]
+    #[ignore]
+    fn live() {
+        let v = super::suggestions("lofi").unwrap();
+        assert!(!v.is_empty(), "{v:?}");
+    }
 }
 
 // ───────────────────────── browse ─────────────────────────

@@ -124,6 +124,7 @@ pub fn thumbnail(v: &VideoItem, url: String, w: Pixels, h: Pixels, radius: Pixel
         .overflow_hidden()
         .bg(p.surface)
         .child(img(SharedString::from(url)).size_full().object_fit(ObjectFit::Cover))
+        .child(crate::player::preview::slot_marker(&v.id, cx))
         .children(badge(v, cx))
         .when_some(progress.filter(|p| *p > 0.01), |d, pr| {
             d.child(
@@ -232,10 +233,11 @@ fn watch_route(v: &VideoItem) -> Route {
 /// so playback begins almost immediately on click.
 fn prefetch_hover(id: &str) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     let id = id.to_string();
-    move |hovered, _, _| {
+    move |hovered, _, cx| {
         if *hovered {
             crate::api::streams::prefetch_on_hover(&id);
         }
+        crate::player::preview::hover(&id, *hovered, cx);
     }
 }
 

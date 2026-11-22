@@ -105,6 +105,8 @@ pub struct Settings {
     pub controls_shade: String,
     pub double_click_fullscreen: bool,
     pub original_audio: bool,
+    /// play a muted preview when the pointer rests on a thumbnail
+    pub hover_preview: bool,
 }
 
 impl Default for Settings {
@@ -195,6 +197,7 @@ impl Default for Settings {
             controls_shade: "default".into(),
             double_click_fullscreen: true,
             original_audio: true,
+            hover_preview: true,
         }
     }
 }
@@ -505,6 +508,31 @@ pub fn progress_map() -> HashMap<String, (f64, f64)> {
         .unwrap()
         .filter_map(Result::ok)
         .collect()
+}
+
+/// Merges an entry from the account's YouTube history: adds it when missing and keeps
+/// the furthest resume position. Local entries keep their own date and order.
+/// Returns true when the entry was new.
+pub fn history_merge_remote(v: &VideoItem, progress: f64, duration: f64, watched_at: i64) -> bool {
+    if !settings_snapshot().history_enabled {
+        return false;
+    }
+    let Ok(j) = serde_json::to_string(v) else { return false };
+    let conn = db().lock();
+    let existed = conn
+        .query_row("SELECT 1 FROM history WHERE video_id=?1", [&v.id], |_| Ok(()))
+        .optional()
+        .ok()
+        .flatten()
+        .is_some();
+    let _ = conn.execute(
+        "INSERT INTO history(video_id, json, watched_at, progress, duration) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(video_id) DO UPDATE SET
+           progress = CASE WHEN excluded.progress > history.progress THEN excluded.progress ELSE history.progress END,
+           duration = CASE WHEN history.duration > 0 THEN history.duration ELSE excluded.duration END",
+        params![v.id, j, watched_at, progress, duration],
+    );
+    !existed
 }
 
 pub fn history_remove(video_id: &str) {

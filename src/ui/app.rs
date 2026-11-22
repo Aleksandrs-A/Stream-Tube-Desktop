@@ -61,6 +61,24 @@ impl Global for UiState {}
 pub struct AppHandle(pub WeakEntity<AppView>);
 impl Global for AppHandle {}
 
+/// The page a YouTube (or `streamtube:`) link opens, if it's one we understand.
+pub fn route_from_link(arg: &str) -> Option<Route> {
+    let arg = crate::links::normalize(arg);
+    let search_arg = arg
+        .contains("/results?")
+        .then(|| arg.split(['?', '&']).find_map(|kv| kv.strip_prefix("search_query=")))
+        .flatten()
+        .map(|q| crate::api::http::urldecode(&q.replace('+', " ")))
+        .filter(|q| !q.trim().is_empty());
+    search_arg.map(Route::Search).or_else(|| {
+        innertube::parse_youtube_url(&arg).map(|r| match r {
+            innertube::ResolvedUrl::Video(id) => Route::Watch { id, playlist: None, start: None },
+            innertube::ResolvedUrl::Channel(id) => Route::Channel(id),
+            innertube::ResolvedUrl::Playlist(id) => Route::Playlist(id),
+        })
+    })
+}
+
 pub fn navigate(route: Route, window: &mut Window, cx: &mut App) {
     if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
         app.update(cx, |a, cx| a.go(route, window, cx));
@@ -165,6 +183,24 @@ pub enum Dialog {
     Update,
 }
 
+/// Pulls the account's watch history (videos watched on other devices, with resume
+/// positions) into the local history, then refreshes progress bars.
+pub fn sync_account_history(cx: &mut App) {
+    if !crate::api::auth::signed_in() || !store::settings_snapshot().history_enabled {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        let res = blocking(|| crate::api::auth::sync_history(3)).await;
+        if res.is_ok() {
+            let _ = cx.update(|cx| {
+                cx.set_global(crate::ui::cards::Watched(store::progress_map()));
+                cx.refresh_windows();
+            });
+        }
+    })
+    .detach();
+}
+
 /// State of the TV device-code sign-in shown in the sign-in dialog.
 #[derive(Default)]
 pub struct LoginFlow {
@@ -241,6 +277,7 @@ pub struct AppView {
     sel_suggestion: Option<usize>,
     mini_view: Entity<PlayerView>,
     main_view: Entity<PlayerView>,
+    preview_view: Entity<crate::player::preview::PreviewView>,
     had_video: bool,
     last_bounds_save: std::time::Instant,
     dialog: Option<Dialog>,
@@ -373,22 +410,12 @@ impl AppView {
         });
         let mini_view = cx.new(|cx| PlayerView::new(p.clone(), true, cx));
         let main_view = cx.new(|cx| PlayerView::new(p.clone(), false, cx));
+        let preview_view = cx.new(crate::player::preview::PreviewView::new);
+        // re-render (to add or drop the preview layer) only when a preview starts or ends
+        subs.push(cx.subscribe(&crate::player::preview::preview(cx), |_, _, _: &crate::player::preview::PreviewEvent, cx| cx.notify()));
         cx.set_global(crate::ui::slot::PlayerSlot::default());
         // a YouTube link passed on the command line opens directly
-        let arg = std::env::args().nth(1).unwrap_or_default();
-        let search_arg = arg
-            .contains("/results?")
-            .then(|| arg.split(['?', '&']).find_map(|kv| kv.strip_prefix("search_query=")))
-            .flatten()
-            .map(|q| crate::api::http::urldecode(&q.replace('+', " ")))
-            .filter(|q| !q.trim().is_empty());
-        let arg_route = search_arg.map(Route::Search).or_else(|| {
-            innertube::parse_youtube_url(&arg).map(|r| match r {
-                innertube::ResolvedUrl::Video(id) => Route::Watch { id, playlist: None, start: None },
-                innertube::ResolvedUrl::Channel(id) => Route::Channel(id),
-                innertube::ResolvedUrl::Playlist(id) => Route::Playlist(id),
-            })
-        });
+        let arg_route = route_from_link(&std::env::args().nth(1).unwrap_or_default());
         let start = arg_route.unwrap_or_else(|| match store::settings_snapshot().start_page.as_str() {
             "subscriptions" => Route::Subscriptions,
             "history" => Route::History,
@@ -405,6 +432,7 @@ impl AppView {
         // keep the local subscription list (sidebar, local feed) in step with the
         // account: immediately when it's empty, otherwise once a day
         if crate::api::auth::signed_in() {
+            sync_account_history(cx);
             let last = store::kv_get("subs_synced_at").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
             if store::subscriptions().is_empty() || crate::api::json::now() - last > 24 * 3600 {
                 cx.spawn(async move |this, cx| {
@@ -430,6 +458,7 @@ impl AppView {
             sel_suggestion: None,
             mini_view,
             main_view,
+            preview_view,
             had_video: false,
             last_bounds_save: std::time::Instant::now(),
             dialog: None,
@@ -500,7 +529,8 @@ impl AppView {
                             toast(cx, format!("Signed in as {}", acc.name));
                             cx.notify();
                         });
-                        // bring the account's subscriptions into the local list
+                        // bring the account's history and subscriptions to this device
+                        let _ = cx.update(|cx| sync_account_history(cx));
                         let res = blocking(auth::sync_subscriptions).await;
                         let _ = this.update(cx, |t, cx| {
                             if let Ok(n) = res {
@@ -738,6 +768,7 @@ impl AppView {
             _ => {}
         }
         cx.set_global(OpenMenu(None));
+        crate::player::preview::stop(cx);
         self.drawer_open = false;
         if route == self.route {
             // re-navigating to the same place refreshes it (like clicking Home again)
@@ -1576,7 +1607,7 @@ impl AppView {
                     .cursor_pointer()
                     .when(active, |d| d.bg(p.chip))
                     .hover(move |s| s.bg(p.hover))
-                    .child(icon(ic).size_5().text_color(p.text))
+                    .child(icon(ic).size_5().text_color(if active { p.accent } else { p.text }))
                     .child(div().text_size(px(10.)).text_color(p.text).child(label))
                     .on_click(cx.listener(move |this, _, window, cx| this.go(r.clone(), window, cx)))
             };
@@ -1615,8 +1646,7 @@ impl AppView {
                 .child(div().flex_1().min_w_0().truncate().child(label))
         };
         let ic = |name: &str, active: bool| -> AnyElement {
-            let _ = active;
-            icon(name).size_5().text_color(p.text).into_any_element()
+            icon(name).size_5().text_color(if active { p.accent } else { p.text }).into_any_element()
         };
         let entry = |id: &'static str, name: &'static str, label: &str, r: Route, active: bool, cx: &mut Context<Self>| {
             row(id.into(), ic(name, active), label.to_string(), active)
@@ -2217,7 +2247,11 @@ impl Render for AppView {
             .relative()
             .overflow_hidden()
             .child(self.page.clone().cached(StyleRefinement::default().size_full()))
-            .when(has_slot, |d| d.child(crate::ui::slot::SlotFollower::new(cx, self.main_view.clone().into())));
+            .when(has_slot, |d| d.child(crate::ui::slot::SlotFollower::new(cx, self.main_view.clone().into())))
+            .when(crate::player::preview::showing(cx).is_some(), |d| {
+                let slot = cx.global::<crate::player::preview::PreviewSlot>().0.clone();
+                d.child(crate::ui::slot::SlotFollower::with_slot(slot, self.preview_view.clone().into()))
+            });
         if fullscreen {
             root = root.child(page_area.size_full());
         } else {
@@ -2248,6 +2282,27 @@ impl Render for AppView {
 pub fn toggle_maximize(window: &mut Window) {
     if !window.is_maximized() {
         window.zoom_window();
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn ShowWindowAsync(hwnd: isize, cmd: i32) -> i32;
+        }
+        if let Ok(h) = HasWindowHandle::window_handle(&*window) {
+            if let RawWindowHandle::Win32(w) = h.as_raw() {
+                const SW_RESTORE: i32 = 9;
+                unsafe { ShowWindowAsync(w.hwnd.get(), SW_RESTORE) };
+            }
+        }
+    }
+}
+
+/// Brings a minimized window back (leaves maximized/normal windows as they are).
+pub fn restore_window(window: &mut Window) {
+    if !window_minimized(window) {
         return;
     }
     #[cfg(windows)]

@@ -250,7 +250,7 @@ fn run_installer(path: &std::path::Path, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::is_newer;
     #[test]
     fn versions() {
         assert!(is_newer("v0.1.0", "0.1.0-alpha"));

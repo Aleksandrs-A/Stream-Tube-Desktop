@@ -46,6 +46,9 @@ pub struct SettingsPage {
     open_dd: Option<&'static str>,
     dd_closed_at: std::time::Instant,
     search: Entity<InputState>,
+    /// SponsorBlock contribution stats for the private ID (None while loading)
+    sb_stats: Option<Result<crate::api::services::SbUserInfo, String>>,
+    sb_serial: u64,
     _subs: Vec<Subscription>,
 }
 
@@ -64,6 +67,7 @@ impl SettingsPage {
             ("download_dir", s.download_dir.clone(), "Download folder", |s, v| s.download_dir = v),
             ("captions_lang", s.captions_lang.clone(), "en", |s, v| s.captions_lang = v),
             ("sb_min", format!("{}", s.sb_min_duration), "0", |s, v| s.sb_min_duration = v.parse().unwrap_or(0.0)),
+            ("sb_user_id", s.sb_user_id.clone(), "Paste your private user ID", |s, v| s.sb_user_id = v),
         ];
         let mut inputs = Vec::new();
         let mut subs = Vec::new();
@@ -73,10 +77,14 @@ impl SettingsPage {
                 i.set_value(val, window, cx);
                 i
             });
-            subs.push(cx.subscribe_in(&st, window, move |_, st, ev: &InputEvent, _, cx| {
+            subs.push(cx.subscribe_in(&st, window, move |this: &mut Self, st, ev: &InputEvent, _, cx| {
                 if matches!(ev, InputEvent::Blur | InputEvent::PressEnter { .. }) {
                     let v = st.read(cx).value().trim().to_string();
+                    let changed = key == "sb_user_id" && v != store::settings_snapshot().sb_user_id;
                     store::update_settings(|s| setter(s, v));
+                    if changed {
+                        this.load_sb_stats(cx);
+                    }
                     if matches!(ev, InputEvent::PressEnter { .. }) {
                         toast(cx, "Saved");
                     }
@@ -114,8 +122,11 @@ impl SettingsPage {
             open_dd: None,
             dd_closed_at: std::time::Instant::now() - std::time::Duration::from_secs(5),
             search,
+            sb_stats: None,
+            sb_serial: 0,
             _subs: subs,
         };
+        page.load_sb_stats(cx);
         cx.spawn(async move |this, cx| {
             let v = blocking(|| {
                 crate::api::streams::ytdlp_path().and_then(|p| {
@@ -134,6 +145,29 @@ impl SettingsPage {
         .detach();
         page.section = Section::General;
         page
+    }
+
+    fn load_sb_stats(&mut self, cx: &mut Context<Self>) {
+        let s = store::settings_snapshot();
+        self.sb_serial += 1;
+        let serial = self.sb_serial;
+        self.sb_stats = None;
+        if s.sb_user_id.trim().is_empty() {
+            cx.notify();
+            return;
+        }
+        let (server, id) = (s.sponsorblock_server.clone(), s.sb_user_id.clone());
+        cx.spawn(async move |this, cx| {
+            let r = blocking(move || crate::api::services::sponsor_user_info(&server, &id)).await;
+            let _ = this.update(cx, |t, cx| {
+                if t.sb_serial == serial {
+                    t.sb_stats = Some(r.map_err(|e| crate::ui::friendly_error(&e.to_string())));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     fn input(&self, key: &str) -> Entity<InputState> {
@@ -197,7 +231,7 @@ fn switch(id: &'static str, on: bool, set: fn(&mut Settings, bool), cx: &App) ->
         .h(px(22.))
         .rounded_full()
         .cursor_pointer()
-        .bg(if on { p.link } else { p.hover })
+        .bg(if on { p.accent } else { p.hover })
         .child(div().absolute().top(px(3.)).left(if on { px(21.) } else { px(3.) }).size(px(16.)).rounded_full().bg(white()))
         .on_click(move |_, window, cx| {
             store::update_settings(|s| set(s, !on));
@@ -205,15 +239,56 @@ fn switch(id: &'static str, on: bool, set: fn(&mut Settings, bool), cx: &App) ->
         })
 }
 
-fn choice<T: PartialEq + Clone + 'static>(id: &'static str, options: &[(T, &str)], cur: T, set: fn(&mut Settings, T), cx: &App) -> impl IntoElement {
-    let mut d = div().flex().flex_wrap().gap_2().justify_end().max_w(px(520.));
+/// Inline segmented control, for settings with a few (3 or fewer) options.
+fn segmented<T: PartialEq + Clone + 'static>(id: &'static str, options: &[(T, &str)], cur: T, set: fn(&mut Settings, T), cx: &App) -> Div {
+    let p = pal(cx);
+    let mut d = div().flex().flex_none().p(px(3.)).gap(px(2.)).rounded_lg().bg(p.chip);
     for (i, (v, label)) in options.iter().enumerate() {
         let v2 = v.clone();
-        d = d.child(chip(SharedString::from(format!("{id}-{i}")), label.to_string(), *v == cur, cx).on_click(move |_, window, cx| {
-            let v3 = v2.clone();
-            store::update_settings(|s| set(s, v3));
-            after_change(id, window, cx);
-        }));
+        let active = *v == cur;
+        d = d.child(
+            div()
+                .id(SharedString::from(format!("{id}-{i}")))
+                .px_3()
+                .h(px(28.))
+                .flex()
+                .items_center()
+                .rounded_md()
+                .cursor_pointer()
+                .text_sm()
+                .when(active, |d| d.bg(p.accent).text_color(white()).font_weight(FontWeight::MEDIUM))
+                .when(!active, |d| d.text_color(p.text).hover(move |s| s.bg(p.hover)))
+                .child(label.to_string())
+                .on_click(move |_, window, cx| {
+                    let v3 = v2.clone();
+                    store::update_settings(|s| set(s, v3));
+                    after_change(id, window, cx);
+                }),
+        );
+    }
+    d
+}
+
+fn accent_swatches(cur: u32, cx: &App) -> Div {
+    let p = pal(cx);
+    let mut d = div().flex().flex_none().items_center().gap_2();
+    for (c, name) in [(0xff0033u32, "Red"), (0xf0307e, "Pink"), (0xab47bc, "Purple"), (0x3ea6ff, "Blue"), (0x00bfa5, "Teal"), (0x2ba640, "Green"), (0xffa000, "Amber")] {
+        let active = c == cur;
+        d = d.child(
+            div()
+                .id(SharedString::from(format!("accent-{name}")))
+                .size(px(28.))
+                .rounded_full()
+                .p(px(3.))
+                .border_2()
+                .border_color(if active { p.text } else { hsla(0., 0., 0., 0.) })
+                .cursor_pointer()
+                .child(div().size_full().rounded_full().bg(rgb(c)).flex().items_center().justify_center().when(active, |d| d.child(icon("check").size_3().text_color(white()))))
+                .on_click(move |_, window, cx| {
+                    store::update_settings(|s| s.accent = c);
+                    after_change("accent", window, cx);
+                }),
+        );
     }
     d
 }
@@ -224,12 +299,21 @@ fn text_field(st: &Entity<InputState>, w: f32, cx: &App) -> impl IntoElement {
 }
 
 impl SettingsPage {
-    /// A dropdown listing `list` (code, name); picks are written with `set`.
-    fn dropdown(&self, id: &'static str, list: &'static [(&'static str, &'static str)], cur: String, set: fn(&mut Settings, String), cx: &mut Context<Self>) -> AnyElement {
+    /// The right control for a choice: inline buttons for up to 3 options, a dropdown above that.
+    fn choice<T: PartialEq + Clone + 'static>(&self, id: &'static str, options: &[(T, &str)], cur: T, set: fn(&mut Settings, T), cx: &mut Context<Self>) -> AnyElement {
+        if options.len() <= 3 {
+            return segmented(id, options, cur, set, cx).into_any_element();
+        }
+        let items: Vec<(String, String, bool, T)> = options.iter().map(|(v, l)| (l.to_string(), String::new(), *v == cur, v.clone())).collect();
+        let label = items.iter().find(|i| i.2).map(|i| i.0.clone()).unwrap_or_default();
+        self.select(id, label, 200., items, set, cx)
+    }
+
+    /// A dropdown button: `items` are (label, detail, active, value).
+    fn select<T: Clone + 'static>(&self, id: &'static str, label: String, width: f32, items: Vec<(String, String, bool, T)>, set: fn(&mut Settings, T), cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
         let open = self.open_dd == Some(id);
-        let label = format!("{}  ·  {}", crate::locale::name(list, &cur), cur);
-        let mut el = div().relative().w(px(280.)).child(
+        let mut el = div().relative().flex_none().w(px(width)).child(
             div()
                 .id(id)
                 .flex()
@@ -240,7 +324,7 @@ impl SettingsPage {
                 .h_9()
                 .rounded_lg()
                 .border_1()
-                .border_color(if open { p.link } else { p.border })
+                .border_color(if open { p.accent } else { p.border })
                 .bg(p.bg)
                 .cursor_pointer()
                 .hover(move |s| s.bg(p.hover))
@@ -253,7 +337,7 @@ impl SettingsPage {
                 })),
         );
         if open {
-            let mut items = div()
+            let mut list = div()
                 .id(SharedString::from(format!("{id}-list")))
                 .occlude()
                 .flex()
@@ -271,12 +355,10 @@ impl SettingsPage {
                     this.dd_closed_at = std::time::Instant::now();
                     cx.notify();
                 }));
-            for (code, name) in list {
-                let active = code.eq_ignore_ascii_case(&cur);
-                let code2 = code.to_string();
-                items = items.child(
+            for (i, (name, detail, active, v)) in items.into_iter().enumerate() {
+                list = list.child(
                     div()
-                        .id(SharedString::from(format!("{id}-{code}")))
+                        .id(SharedString::from(format!("{id}-opt{i}")))
                         .flex()
                         .items_center()
                         .gap_3()
@@ -287,11 +369,11 @@ impl SettingsPage {
                         .text_color(p.text)
                         .when(active, |d| d.bg(p.hover).font_weight(FontWeight::MEDIUM))
                         .hover(move |s| s.bg(p.hover))
-                        .child(div().w_4().child(if active { icon("check").size_4().text_color(p.link).into_any_element() } else { div().into_any_element() }))
-                        .child(div().flex_1().child(name.to_string()))
-                        .child(div().text_xs().text_color(p.text2).child(code.to_string()))
+                        .child(div().w_4().child(if active { icon("check").size_4().text_color(p.accent).into_any_element() } else { div().into_any_element() }))
+                        .child(div().flex_1().child(name))
+                        .when(!detail.is_empty(), |d| d.child(div().text_xs().text_color(p.text2).child(detail)))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            let v = code2.clone();
+                            let v = v.clone();
                             store::update_settings(|s| set(s, v));
                             this.open_dd = None;
                             after_change(id, window, cx);
@@ -299,9 +381,16 @@ impl SettingsPage {
                         })),
                 );
             }
-            el = el.child(deferred(div().absolute().top(px(40.)).left_0().w_full().child(items)).with_priority(5));
+            el = el.child(deferred(div().absolute().top(px(40.)).left_0().w_full().child(list)).with_priority(5));
         }
         el.into_any_element()
+    }
+
+    /// A dropdown listing `list` (code, name); picks are written with `set`.
+    fn dropdown(&self, id: &'static str, list: &'static [(&'static str, &'static str)], cur: String, set: fn(&mut Settings, String), cx: &mut Context<Self>) -> AnyElement {
+        let label = format!("{}  ·  {}", crate::locale::name(list, &cur), cur);
+        let items = list.iter().map(|(code, name)| (name.to_string(), code.to_string(), code.eq_ignore_ascii_case(&cur), code.to_string())).collect();
+        self.select(id, label, 280., items, set, cx)
     }
 
     fn premium(&self, cx: &mut Context<Self>) -> Div {
@@ -326,7 +415,7 @@ impl SettingsPage {
             .child(row(
                 "Controls shade",
                 "Gradient behind the player controls",
-                choice("shade", &[("light".to_string(), "Light"), ("default".to_string(), "Default"), ("strong".to_string(), "Strong")], s.controls_shade.clone(), |s, v| s.controls_shade = v, cx),
+                self.choice("shade", &[("light".to_string(), "Light"), ("default".to_string(), "Default"), ("strong".to_string(), "Strong")], s.controls_shade.clone(), |s, v| s.controls_shade = v, cx),
                 cx,
             ))
     }
@@ -342,24 +431,23 @@ impl SettingsPage {
         let account_desc = account.map(|a| a.name).unwrap_or_else(|| "Personal recommendations, subscriptions, likes and history".into());
         card(cx)
             .child(row("YouTube account", &account_desc, account_ctl, cx))
-            .child(row("Theme", "", choice("theme", &[("dark".to_string(), "Dark"), ("light".to_string(), "Light"), ("system".to_string(), "System")], s.theme.clone(), |s, v| s.theme = v, cx), cx))
+            .child(row("Theme", "", self.choice("theme", &[("dark".to_string(), "Dark"), ("light".to_string(), "Light"), ("system".to_string(), "System")], s.theme.clone(), |s, v| s.theme = v, cx), cx))
+            .child(row("Accent color", "Switches, highlights, progress and the seek bar", accent_swatches(s.accent, cx), cx))
+            .child(row("Start page", "", self.choice("start", &[("home".to_string(), "Home"), ("subscriptions".to_string(), "Subscriptions"), ("history".to_string(), "History")], s.start_page.clone(), |s, v| s.start_page = v, cx), cx))
+            .child(row("Interface size", "", self.choice("scale", &[(0.9f32, "90%"), (1.0, "100%"), (1.1, "110%"), (1.25, "125%")], s.ui_scale, |s, v| s.ui_scale = v, cx), cx))
+            .child(row("Density", "", self.choice("density", &[("compact".to_string(), "Compact"), ("default".to_string(), "Default"), ("comfortable".to_string(), "Comfortable")], s.density.clone(), |s, v| s.density = v, cx), cx))
+            .child(row("Thumbnail corners", "", self.choice("radius", &[(0.0f32, "Square"), (6.0, "Small"), (12.0, "Rounded"), (18.0, "Large")], s.thumb_radius, |s, v| s.thumb_radius = v, cx), cx))
+            .child(row("Grid columns", "", self.choice("cols", &[(0u32, "Auto"), (3, "3"), (4, "4"), (5, "5"), (6, "6")], s.grid_columns, |s, v| s.grid_columns = v, cx), cx))
             .child(row(
-                "Accent color",
-                "",
-                choice(
-                    "accent",
-                    &[(0xff0033u32, "Red"), (0x3ea6ff, "Blue"), (0x2ba640, "Green"), (0xab47bc, "Purple"), (0xffa000, "Amber"), (0xff4081, "Pink")],
-                    s.accent,
-                    |s, v| s.accent = v,
-                    cx,
-                ),
+                "Open YouTube links in Stream Tube",
+                "Add this as a browser bookmark. Clicking it on any YouTube page opens that video, channel or playlist here. streamtube:// links open here too.",
+                pill("bm-copy", Some("bookmark"), "Copy bookmark", cx).on_click(|_, _, cx| {
+                    copy_to_clipboard(crate::links::BOOKMARKLET.to_string(), cx);
+                    toast(cx, "Copied: make a new bookmark and paste this as its URL");
+                }),
                 cx,
             ))
-            .child(row("Start page", "", choice("start", &[("home".to_string(), "Home"), ("subscriptions".to_string(), "Subscriptions"), ("history".to_string(), "History")], s.start_page.clone(), |s, v| s.start_page = v, cx), cx))
-            .child(row("Interface size", "", choice("scale", &[(0.9f32, "90%"), (1.0, "100%"), (1.1, "110%"), (1.25, "125%")], s.ui_scale, |s, v| s.ui_scale = v, cx), cx))
-            .child(row("Density", "", choice("density", &[("compact".to_string(), "Compact"), ("default".to_string(), "Default"), ("comfortable".to_string(), "Comfortable")], s.density.clone(), |s, v| s.density = v, cx), cx))
-            .child(row("Thumbnail corners", "", choice("radius", &[(0.0f32, "Square"), (6.0, "Small"), (12.0, "Rounded"), (18.0, "Large")], s.thumb_radius, |s, v| s.thumb_radius = v, cx), cx))
-            .child(row("Grid columns", "", choice("cols", &[(0u32, "Auto"), (3, "3"), (4, "4"), (5, "5"), (6, "6")], s.grid_columns, |s, v| s.grid_columns = v, cx), cx))
+            .child(row("Play videos on hover", "Muted preview when the pointer rests on a thumbnail", switch("hovp", s.hover_preview, |s, v| s.hover_preview = v, cx), cx))
             .child(row("Region", "Trending, Explore and search results", self.dropdown("dd-region", crate::locale::REGIONS, s.region.clone(), |s, v| s.region = v, cx), cx))
             .child(row("Language", "Titles, dates and YouTube's text", self.dropdown("dd-lang", crate::locale::LANGUAGES, s.language.clone(), |s, v| s.language = v, cx), cx))
     }
@@ -370,11 +458,11 @@ impl SettingsPage {
             .child(row(
                 "Default quality",
                 "Maximum resolution to start videos at",
-                choice("q", &[(2160u32, "4K"), (1440, "1440p"), (1080, "1080p"), (720, "720p"), (480, "480p"), (360, "360p")], s.default_quality, |s, v| s.default_quality = v, cx),
+                self.choice("q", &[(2160u32, "4K"), (1440, "1440p"), (1080, "1080p"), (720, "720p"), (480, "480p"), (360, "360p")], s.default_quality, |s, v| s.default_quality = v, cx),
                 cx,
             ))
-            .child(row("Preferred codec", "", choice("codec", &[("vp9".to_string(), "VP9"), ("av1".to_string(), "AV1"), ("h264".to_string(), "H.264")], s.codec_pref.clone(), |s, v| s.codec_pref = v, cx), cx))
-            .child(row("Default speed", "", choice("speed", &[(0.75f64, "0.75x"), (1.0, "1x"), (1.25, "1.25x"), (1.5, "1.5x"), (1.75, "1.75x"), (2.0, "2x")], s.default_speed, |s, v| s.default_speed = v, cx), cx))
+            .child(row("Preferred codec", "", self.choice("codec", &[("vp9".to_string(), "VP9"), ("av1".to_string(), "AV1"), ("h264".to_string(), "H.264")], s.codec_pref.clone(), |s, v| s.codec_pref = v, cx), cx))
+            .child(row("Default speed", "", self.choice("speed", &[(0.75f64, "0.75x"), (1.0, "1x"), (1.25, "1.25x"), (1.5, "1.5x"), (1.75, "1.75x"), (2.0, "2x")], s.default_speed, |s, v| s.default_speed = v, cx), cx))
             .child(row("Remember speed per channel", "", switch("rsp", s.remember_speed_per_channel, |s, v| s.remember_speed_per_channel = v, cx), cx))
             .child(row("Autoplay next video", "", switch("autoplay", s.autoplay_next, |s, v| s.autoplay_next = v, cx), cx))
             .child(row("Resume where you left off", "", switch("resume", s.resume_playback, |s, v| s.resume_playback = v, cx), cx))
@@ -383,11 +471,11 @@ impl SettingsPage {
             .child(row("Hardware decoding", "Takes effect after restart", switch("hw", s.hwdec, |s, v| s.hwdec = v, cx), cx))
             .child(row("Captions on by default", "", switch("cc", s.captions_enabled, |s, v| s.captions_enabled = v, cx), cx))
             .child(row("Caption language", "Preferred subtitle track", self.dropdown("dd-cap", crate::locale::LANGUAGES, s.captions_lang.clone(), |s, v| s.captions_lang = v, cx), cx))
-            .child(row("Caption size", "", choice("capsize", &[(30u32, "Small"), (40, "Medium"), (52, "Large"), (64, "Extra large")], s.caption_size, |s, v| s.caption_size = v, cx), cx))
+            .child(row("Caption size", "", self.choice("capsize", &[(30u32, "Small"), (40, "Medium"), (52, "Large"), (64, "Extra large")], s.caption_size, |s, v| s.caption_size = v, cx), cx))
             .child(row("Caption background", "", switch("capbg", s.caption_background, |s, v| s.caption_background = v, cx), cx))
-            .child(row("Hide controls after", "", choice("hide", &[(1500u64, "1.5s"), (2500, "2.5s"), (4000, "4s"), (8000, "8s")], s.controls_hide_ms, |s, v| s.controls_hide_ms = v, cx), cx))
+            .child(row("Hide controls after", "", self.choice("hide", &[(1500u64, "1.5s"), (2500, "2.5s"), (4000, "4s"), (8000, "8s")], s.controls_hide_ms, |s, v| s.controls_hide_ms = v, cx), cx))
             .child(row("Seek bar preview thumbnails", "", switch("sbprev", s.show_storyboard, |s, v| s.show_storyboard = v, cx), cx))
-            .child(row("Arrow key seek step", "", choice("step", &[(5.0f64, "5s"), (10.0, "10s"), (15.0, "15s"), (30.0, "30s")], s.seek_step, |s, v| s.seek_step = v, cx), cx))
+            .child(row("Arrow key seek step", "", self.choice("step", &[(5.0f64, "5s"), (10.0, "10s"), (15.0, "15s"), (30.0, "30s")], s.seek_step, |s, v| s.seek_step = v, cx), cx))
             .child(row("External player", "Used by “Open in external player”", text_field(&self.input("external"), 320., cx), cx))
 
     }
@@ -402,48 +490,52 @@ impl SettingsPage {
             .child(row("Server", "", text_field(&self.input("sb_server"), 320., cx), cx))
             .child(row(
                 "Private user ID",
-                if s.sb_user_id.is_empty() { "Needed to vote on segments. Keep it secret." } else { "Used to vote on segments. Keep it secret." },
+                "Paste the ID from the SponsorBlock extension or another app, or generate one. Keep it secret.",
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
+                    .child(text_field(&self.input("sb_user_id"), 260., cx))
                     .when(!s.sb_user_id.is_empty(), |d| {
                         let id = s.sb_user_id.clone();
-                        let masked = format!("{}••••••••", id.chars().take(4).collect::<String>());
-                        d.child(div().text_sm().text_color(p.text2).child(masked))
-                            .child(pill("sbid-copy", Some("copy"), "Copy", cx).on_click(move |_, _, cx| copy_to_clipboard(id.clone(), cx)))
+                        d.child(icon_button("sbid-copy", "copy", cx).on_click(move |_, _, cx| {
+                            copy_to_clipboard(id.clone(), cx);
+                            toast(cx, "Copied");
+                        }))
                     })
-                    .child(pill("sbid-gen", Some("key-round"), if s.sb_user_id.is_empty() { "Generate" } else { "New ID" }, cx).on_click(|_, window, cx| {
+                    .child(pill("sbid-gen", Some("key-round"), "Generate", cx).on_click(cx.listener(|this, _, window, cx| {
                         let id = crate::api::services::new_sb_user_id();
-                        store::update_settings(|s| s.sb_user_id = id);
+                        store::update_settings(|s| s.sb_user_id = id.clone());
+                        this.input("sb_user_id").update(cx, |i, cx| i.set_value(id, window, cx));
                         toast(cx, "New SponsorBlock ID created");
+                        this.load_sb_stats(cx);
                         after_change("sbid", window, cx);
-                    })),
+                    }))),
                 cx,
             ));
         for (cat, name, color) in SB_CATEGORIES {
             let cur = s.sb_actions.get(*cat).cloned().unwrap_or_else(|| "off".into());
-            let mut opts = div().flex().gap_2();
-            for (v, l) in [("skip", "Auto skip"), ("ask", "Ask"), ("show", "Show in seek bar"), ("off", "Off")] {
-                if *cat == "poi_highlight" && (v == "skip" || v == "ask") {
-                    continue;
-                }
-                let cat2 = cat.to_string();
-                opts = opts.child(chip(SharedString::from(format!("sb-{cat}-{v}")), l, cur == v, cx).on_click(move |_, _, cx| {
-                    let c = cat2.clone();
-                    store::update_settings(|s| {
-                        s.sb_actions.insert(c, v.to_string());
-                    });
-                    cx.refresh_windows();
-                }));
-            }
-            c = c.child(row(name, "", opts, cx).child(div().size_3().rounded_full().bg(rgb(*color))));
+            let opts: Vec<(String, &str)> = [("skip", "Auto skip"), ("ask", "Ask"), ("show", "Show in seek bar"), ("off", "Off")]
+                .into_iter()
+                .filter(|(v, _)| !(*cat == "poi_highlight" && (*v == "skip" || *v == "ask")))
+                .map(|(v, l)| (v.to_string(), l))
+                .collect();
+            let items = opts.iter().map(|(v, l)| (l.to_string(), String::new(), *v == cur, (cat.to_string(), v.clone()))).collect();
+            let label = opts.iter().find(|(v, _)| *v == cur).map(|(_, l)| l.to_string()).unwrap_or_default();
+            let id: &'static str = Box::leak(format!("sbcat-{cat}").into_boxed_str());
+            let ctl = self.select(id, label, 180., items, |s, (c, v): (String, String)| {
+                s.sb_actions.insert(c, v);
+            }, cx);
+            c = c.child(
+                row(name, "", div().flex().items_center().gap_3().child(div().size_3().rounded_full().bg(rgb(*color))).child(ctl), cx),
+            );
         }
         let _ = p;
         div()
             .flex()
             .flex_col()
             .gap_6()
+            .child(self.sb_stats_card(cx))
             .child(c)
             .child(
                 card(cx)
@@ -451,6 +543,85 @@ impl SettingsPage {
                     .child(row("DeArrow thumbnails", "", switch("dath", s.dearrow_thumbnails, |s, v| s.dearrow_thumbnails = v, cx), cx))
                     .child(row("Return YouTube Dislike", "", switch("ryd", s.ryd, |s, v| s.ryd = v, cx), cx)),
             )
+    }
+
+    /// Contribution stats for the private ID, like the extension's popup.
+    fn sb_stats_card(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let s = store::settings_snapshot();
+        let hidden = QUERY.with(|q| {
+            let q = q.borrow();
+            !q.is_empty() && !"sponsorblock stats contributions segments saved".contains(q.as_str())
+        });
+        if s.sb_user_id.trim().is_empty() || hidden {
+            return div().into_any_element();
+        }
+        let stat = |value: String, label: &str| {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .gap_1()
+                .p_4()
+                .rounded_lg()
+                .bg(p.bg)
+                .child(div().text_xl().font_weight(FontWeight::BOLD).text_color(p.text).child(value))
+                .child(div().text_xs().text_color(p.text2).child(label.to_string()))
+        };
+        let body = match &self.sb_stats {
+            None => div().py_3().text_sm().text_color(p.text2).child("Loading your stats…").into_any_element(),
+            Some(Err(e)) => div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .py_3()
+                .child(div().text_sm().text_color(p.text2).child(format!("Couldn't load stats: {e}")))
+                .child(pill("sb-retry", Some("refresh-cw"), "Retry", cx).on_click(cx.listener(|this, _, _, cx| this.load_sb_stats(cx))))
+                .into_any_element(),
+            Some(Ok(u)) => {
+                let fmt = crate::api::services::compact_count;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .py_3()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_sm()
+                            .text_color(p.text)
+                            .child(icon("shield-check").size_4().text_color(p.accent))
+                            .child(if u.user_name.is_empty() { "Your contributions".to_string() } else { format!("{} · your contributions", u.user_name) })
+                            .when(u.vip, |d| d.child(div().px_2().rounded_full().bg(p.accent).text_xs().text_color(white()).child("VIP"))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .child(stat(fmt(u.segments), "segments submitted"))
+                            .child(stat(fmt(u.views), "skips by others"))
+                            .child(stat(crate::api::services::format_saved_minutes(u.minutes_saved), "of people's time saved"))
+                            .child(stat(format!("{:.1}", u.reputation), "reputation")),
+                    )
+                    .when(u.segments == 0, |d| d.child(div().text_xs().text_color(p.text2).child("No submissions yet for this ID. Segments you submit will count here.")))
+                    .when(u.warnings > 0, |d| d.child(div().text_xs().text_color(p.text2).child(format!("{} active warning(s) on this account", u.warnings))))
+                    .into_any_element()
+            }
+        };
+        card(cx)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pt_2()
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Your SponsorBlock stats"))
+                    .child(icon_button("sb-refresh", "refresh-cw", cx).on_click(cx.listener(|this, _, _, cx| this.load_sb_stats(cx)))),
+            )
+            .child(body)
+            .into_any_element()
     }
 
     fn content(&self, cx: &mut Context<Self>) -> Div {
@@ -533,7 +704,7 @@ impl SettingsPage {
             .child(row(
                 "Feed source",
                 "",
-                choice("fs", &[("full".to_string(), "Full"), ("rss".to_string(), "RSS")], s.feed_source.clone(), |s, v| s.feed_source = v, cx),
+                self.choice("fs", &[("full".to_string(), "Full"), ("rss".to_string(), "RSS")], s.feed_source.clone(), |s, v| s.feed_source = v, cx),
                 cx,
             ))
             .child(row("Include Shorts in feed", "Extra request per channel", switch("fis", s.feed_include_shorts, |s, v| s.feed_include_shorts = v, cx), cx))
@@ -562,7 +733,7 @@ impl SettingsPage {
             .child(row(
                 "Stream backend",
                 "",
-                choice("sb2", &[("auto".to_string(), "Auto"), ("innertube".to_string(), "Built-in only"), ("ytdlp".to_string(), "yt-dlp only")], s.stream_backend.clone(), |s, v| s.stream_backend = v, cx),
+                self.choice("sb2", &[("auto".to_string(), "Auto"), ("innertube".to_string(), "Built-in only"), ("ytdlp".to_string(), "yt-dlp only")], s.stream_backend.clone(), |s, v| s.stream_backend = v, cx),
                 cx,
             ))
             .child(row(
@@ -600,7 +771,7 @@ impl SettingsPage {
             .child(row(
                 "Default format",
                 "",
-                choice("df", &crate::downloads::FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect::<Vec<_>>(), s.download_format.clone(), |s, v| s.download_format = v, cx),
+                self.choice("df", &crate::downloads::FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect::<Vec<_>>(), s.download_format.clone(), |s, v| s.download_format = v, cx),
                 cx,
             ))
     }
@@ -745,7 +916,7 @@ impl Render for SettingsPage {
                     .text_color(p.text)
                     .when(active, |d| d.bg(p.chip).font_weight(FontWeight::SEMIBOLD))
                     .hover(move |s| s.bg(p.hover))
-                    .child(icon(ic).size_5().text_color(p.text))
+                    .child(icon(ic).size_5().text_color(if active { p.accent } else { p.text }))
                     .child(name.to_string())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.section = sec;

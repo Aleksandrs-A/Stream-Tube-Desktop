@@ -1216,7 +1216,24 @@ impl Render for WatchPage {
         let chat_panel = self.render_chat(cx);
         let related = info.as_ref().map(|w| self.render_related(w, cx));
         let secondary = div().flex().flex_col().w(if two_col { side_w } else { avail }).flex_none().children(chat_panel).children(queue_panel).children(related);
-        let player_box = div().w(if ui.theater { vp.width } else { primary_w }).h(player_h).flex_none().when(!ui.theater, |d| d.rounded_xl().overflow_hidden()).child(crate::ui::slot::player_slot(cx));
+        // ambient mode: a soft glow in the picture's colours around the player
+        let glow = (!ui.theater && store::settings_snapshot().ambient_mode)
+            .then(|| crate::player::controller::player(cx).read(cx).ambient)
+            .flatten()
+            .map(|c| {
+                let mut h: Hsla = c.into();
+                h.a = if pal(cx).dark { 0.55 } else { 0.35 };
+                h
+            });
+        let player_box = div()
+            .w(if ui.theater { vp.width } else { primary_w })
+            .h(player_h)
+            .flex_none()
+            .when(!ui.theater, |d| d.rounded_xl().overflow_hidden())
+            .when_some(glow, |d, color| {
+                d.shadow(vec![BoxShadow { color, offset: point(px(0.), px(0.)), blur_radius: px(90.), spread_radius: px(12.), inset: false }])
+            })
+            .child(crate::ui::slot::player_slot(cx));
 
         let body = if ui.theater {
             div()

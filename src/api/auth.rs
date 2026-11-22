@@ -327,7 +327,64 @@ pub fn home() -> Result<Page> {
 /// The signed-in account's YouTube watch history (newest first).
 pub fn history() -> Result<Page> {
     let r = tv_call("browse", json!({ "browseId": "FEhistory" }))?;
+    harvest_removal_tokens(&r);
     Ok(videos(collect_items(&r)))
+}
+
+/// video id -> feedback token of its "Remove from watch history" menu item
+fn removal_tokens() -> &'static Mutex<std::collections::HashMap<String, String>> {
+    static T: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+/// Remembers the removal tokens of every history tile in a browse response.
+fn harvest_removal_tokens(r: &Value) {
+    fn token_in(v: &Value) -> Option<String> {
+        match v {
+            Value::Object(m) => {
+                if let Some(item) = m.get("menuServiceItemRenderer") {
+                    let text = item.pointer("/text/runs/0/text").and_then(Value::as_str).unwrap_or("").to_lowercase();
+                    if let Some(t) = item.pointer("/serviceEndpoint/feedbackEndpoint/feedbackToken").and_then(Value::as_str) {
+                        if text.contains("history") || text.contains("remove") {
+                            return Some(t.to_string());
+                        }
+                    }
+                }
+                m.values().find_map(token_in)
+            }
+            Value::Array(a) => a.iter().find_map(token_in),
+            _ => None,
+        }
+    }
+    fn walk(v: &Value, out: &mut Vec<(String, String)>) {
+        match v {
+            Value::Object(m) => {
+                if let Some(tile) = m.get("tileRenderer") {
+                    let id = tile.pointer("/onSelectCommand/watchEndpoint/videoId").and_then(Value::as_str);
+                    if let (Some(id), Some(t)) = (id, token_in(tile)) {
+                        out.push((id.to_string(), t));
+                    }
+                    return;
+                }
+                m.values().for_each(|x| walk(x, out));
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(r, &mut out);
+    if !out.is_empty() {
+        removal_tokens().lock().extend(out);
+    }
+}
+
+/// Removes a video from the account's YouTube watch history.
+pub fn remove_from_history(video_id: &str) -> Result<()> {
+    let token = removal_tokens().lock().get(video_id).cloned().ok_or_else(|| anyhow!("reload your history and try again"))?;
+    tv_call("feedback", json!({ "feedbackTokens": [token] }))?;
+    removal_tokens().lock().remove(video_id);
+    Ok(())
 }
 
 /// The signed-in user's subscriptions feed.
@@ -338,6 +395,7 @@ pub fn subscriptions_feed() -> Result<Page> {
 
 pub fn browse_continue(token: &str) -> Result<Page> {
     let r = tv_call("browse", json!({ "continuation": token }))?;
+    harvest_removal_tokens(&r);
     Ok(videos(collect_items(&r)))
 }
 
@@ -553,4 +611,66 @@ pub fn send_live_chat(channel_id: &str, video_id: &str, message: &str) -> Result
         anyhow::bail!(if t.is_empty() { "YouTube did not accept the message".to_string() } else { t });
     }
     Ok(())
+}
+
+/// Brings the account's YouTube watch history (from every device) into the local
+/// history, with resume positions. Returns how many videos were new here.
+pub fn sync_history(max_pages: usize) -> Result<usize> {
+    use crate::api::json::{find_all, parse_duration, text};
+    let mut r = tv_call("browse", json!({ "browseId": "FEhistory" }))?;
+    let now = crate::api::json::now();
+    let mut added = 0;
+    let mut n = 0i64;
+    for page in 0..max_pages {
+        let mut tiles = Vec::new();
+        find_all(&r, "tileRenderer", &mut tiles);
+        for t in tiles {
+            let Some(mut v) = crate::api::innertube::parse_tile(t) else { continue };
+            let resume = t.pointer("/onSelectCommand/watchEndpoint/startTimeSeconds").and_then(Value::as_f64).unwrap_or(0.0);
+            let mut overlays = Vec::new();
+            find_all(t, "thumbnailOverlayTimeStatusRenderer", &mut overlays);
+            let duration = overlays.first().and_then(|o| o.get("text")).map(text).as_deref().and_then(parse_duration).unwrap_or(0) as f64;
+            let mut pct = Vec::new();
+            find_all(t, "thumbnailOverlayResumePlaybackRenderer", &mut pct);
+            let percent = pct.first().and_then(|p| p.get("percentDurationWatched")).and_then(Value::as_f64).unwrap_or(0.0);
+            // a finished video has no start time but 100% watched
+            let progress = if resume > 0.0 { resume } else if percent >= 95.0 { duration } else { duration * percent / 100.0 };
+            if v.duration_secs.is_none() && duration > 0.0 {
+                v.duration_secs = Some(duration as u64);
+            }
+            // newest first: keep the account's order for entries new to this device
+            if crate::store::history_merge_remote(&v, progress, duration, now - n * 60) {
+                added += 1;
+            }
+            n += 1;
+        }
+        let Some(tok) = collect_items(&r).continuation else { break };
+        if page + 1 >= max_pages {
+            break;
+        }
+        r = tv_call("browse", json!({ "continuation": tok }))?;
+    }
+    Ok(added)
+}
+
+#[cfg(test)]
+mod live_tests {
+    #[test]
+    #[ignore]
+    fn history_live() {
+        if !super::signed_in() {
+            eprintln!("not signed in");
+            return;
+        }
+        let r = super::tv_call("browse", serde_json::json!({ "browseId": "FEhistory" })).unwrap();
+        std::fs::write(std::env::temp_dir().join("st_hist.json"), serde_json::to_string_pretty(&r).unwrap()).unwrap();
+        eprintln!("sync added {}", super::sync_history(2).unwrap());
+        let p = super::history().unwrap();
+        eprintln!("items={} cont={}", p.items.len(), p.continuation.is_some());
+        for i in p.items.iter().take(5) {
+            if let crate::api::types::Item::Video(v) = i {
+                eprintln!("  {} | {} | {:?}", v.id, v.title, v.published_text);
+            }
+        }
+    }
 }

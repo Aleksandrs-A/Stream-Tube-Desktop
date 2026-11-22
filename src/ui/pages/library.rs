@@ -42,6 +42,7 @@ impl HistoryPage {
             yt_loading_more: false,
         };
         if signed_in {
+            crate::ui::app::sync_account_history(cx);
             s.yt = Some(Load::Loading);
             cx.spawn(async move |this, cx| {
                 let res = blocking(crate::api::auth::history).await;
@@ -102,12 +103,48 @@ impl HistoryPage {
             list = list.child(empty_state("history", if q.is_empty() { "Your YouTube watch history is empty" } else { "No matches" }, "", cx));
         }
         for v in &shown {
-            list = list.child(video_row(v, px(246.), cx));
+            let id = v.id.clone();
+            list = list.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().child(video_row(v, px(246.), cx)))
+                    .child(icon_button(SharedString::from(format!("yhx-{}", v.id)), "x", cx).on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.remove_account_entry(id.clone(), cx);
+                    }))),
+            );
         }
         if has_more {
             list = list.child(loading_row(cx));
         }
         list
+    }
+
+    /// Removes an entry from the YouTube history (and this device's), restoring it if that fails.
+    fn remove_account_entry(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(Load::Ready(list)) = &mut self.yt else { return };
+        let Some(pos) = list.iter().position(|v| v.id == id) else { return };
+        let removed = list.remove(pos);
+        store::history_remove(&id);
+        cx.default_global::<Watched>().0.remove(&id);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let id2 = id.clone();
+            let res = blocking(move || crate::api::auth::remove_from_history(&id2)).await;
+            let _ = this.update(cx, |t, cx| match res {
+                Ok(()) => toast(cx, "Removed from watch history"),
+                Err(e) => {
+                    if let Some(Load::Ready(list)) = &mut t.yt {
+                        list.insert(pos.min(list.len()), removed);
+                    }
+                    toast(cx, format!("Couldn't remove it from YouTube: {}", crate::ui::friendly_error(&e.to_string())));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn search_list(&mut self, q: &str, cx: &mut Context<Self>) -> Div {
@@ -134,11 +171,11 @@ impl HistoryPage {
                     .on_click(move |_, window, cx| navigate(Route::Search(a.clone()), window, cx))
                     .child(icon("history").size_4().text_color(p.text2))
                     .child(div().flex_1().min_w_0().truncate().text_color(p.text).child(item))
-                    .child(icon_button(SharedString::from(format!("shx-{i}")), "x", cx).on_click(move |_, _, cx| {
+                    .child(icon_button(SharedString::from(format!("shx-{i}")), "x", cx).on_click(cx.listener(move |_, _, _, cx| {
                         cx.stop_propagation();
                         store::search_history_remove(&b);
-                        cx.refresh_windows();
-                    })),
+                        cx.notify();
+                    }))),
             );
         }
         list
@@ -197,11 +234,12 @@ impl Render for HistoryPage {
                     .items_start()
                     .gap_2()
                     .child(div().flex_1().min_w_0().child(video_row(&h.video, px(246.), cx)))
-                    .child(icon_button(SharedString::from(format!("hx-{}", h.video.id)), "x", cx).on_click(move |_, _, cx| {
+                    .child(icon_button(SharedString::from(format!("hx-{}", h.video.id)), "x", cx).on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
                         store::history_remove(&id);
                         cx.default_global::<Watched>().0.remove(&id);
-                        cx.refresh_windows();
-                    })),
+                        crate::ui::app::refresh_all_pages(cx);
+                    }))),
             );
         }
         if self.tab == HistTab::Account {
@@ -220,24 +258,25 @@ impl Render for HistoryPage {
             .child(div().flex().items_center().gap_2().border_b_1().border_color(p.border).pb_1().child(icon("search").size_4().text_color(p.text2)).child(Input::new(&self.filter).appearance(false).cleanable(true)))
             .child(
                 pill("h-clear", Some("trash-2"), "Clear all watch history", cx).on_click(|_, window, cx| {
-                    confirm("Clear watch history?", "All watch history and resume positions will be deleted.", "Clear", window, cx, |_, cx| {
+                    confirm("Clear watch history?", "All watch history on this device and resume positions will be deleted.", "Clear", window, cx, |_, cx| {
                         store::history_clear();
                         cx.default_global::<Watched>().0.clear();
-                        cx.refresh_windows();
+                        crate::ui::app::refresh_all_pages(cx);
                     });
                 }),
             )
             .child(
-                pill("h-pause", Some(if s.history_enabled { "pause" } else { "play" }), if s.history_enabled { "Pause watch history" } else { "Turn on watch history" }, cx).on_click(|_, _, cx| {
+                pill("h-pause", Some(if s.history_enabled { "pause" } else { "play" }), if s.history_enabled { "Pause watch history" } else { "Turn on watch history" }, cx).on_click(cx.listener(|_, _, _, cx| {
                     store::update_settings(|s| s.history_enabled ^= true);
-                    cx.refresh_windows();
-                }),
+                    cx.notify();
+                })),
             )
             .child(
-                pill("h-search", Some("search-x"), "Clear search history", cx).on_click(|_, _, cx| {
+                pill("h-search", Some("search-x"), "Clear search history", cx).on_click(cx.listener(|_, _, _, cx| {
                     store::search_history_clear();
                     toast(cx, "Search history cleared");
-                }),
+                    cx.notify();
+                })),
             );
         page_scroll("hist-scroll", &self.scroll).child(
             div().flex().justify_center().px_6().pt_6().pb_24().child(

@@ -276,3 +276,63 @@ pub fn new_sb_user_id() -> String {
     }
     out
 }
+
+/// A SponsorBlock contributor's public stats (`/api/userInfo`).
+#[derive(Clone, Debug, Default)]
+pub struct SbUserInfo {
+    pub user_name: String,
+    pub segments: u64,
+    pub views: u64,
+    pub minutes_saved: f64,
+    pub reputation: f64,
+    pub warnings: u64,
+    pub vip: bool,
+}
+
+pub fn sponsor_user_info(server: &str, private_id: &str) -> Result<SbUserInfo> {
+    let url = format!("{}/api/userInfo?userID={}", server.trim_end_matches('/'), http::urlencode(private_id));
+    let (status, v) = http::get_json_status(&url)?;
+    if status == 404 {
+        // a fresh ID that never submitted anything
+        return Ok(SbUserInfo::default());
+    }
+    if status >= 400 {
+        anyhow::bail!("server answered {status}");
+    }
+    let num = |k: &str| v.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let name = v.get("userName").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let public = v.get("userID").and_then(|x| x.as_str()).unwrap_or("");
+    Ok(SbUserInfo {
+        // without a username set, the server echoes the public ID
+        user_name: if name == public { String::new() } else { name },
+        segments: num("segmentCount") as u64,
+        views: num("viewCount") as u64,
+        minutes_saved: num("minutesSaved"),
+        reputation: num("reputation"),
+        warnings: num("warnings") as u64,
+        vip: v.get("vip").and_then(|x| x.as_bool()).unwrap_or(false),
+    })
+}
+
+/// "3 days 4 hours", "5 hours 12 minutes", "42 minutes"
+pub fn format_saved_minutes(m: f64) -> String {
+    let total = m.max(0.0).round() as u64;
+    let (d, h, min) = (total / 1440, (total % 1440) / 60, total % 60);
+    let plural = |n: u64, w: &str| format!("{n} {w}{}", if n == 1 { "" } else { "s" });
+    if d > 0 {
+        format!("{} {}", plural(d, "day"), plural(h, "hour"))
+    } else if h > 0 {
+        format!("{} {}", plural(h, "hour"), plural(min, "minute"))
+    } else {
+        plural(min, "minute")
+    }
+}
+
+/// 1234 -> "1.2K"
+pub fn compact_count(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=999_999 => format!("{:.1}K", n as f64 / 1e3).replace(".0K", "K"),
+        _ => format!("{:.1}M", n as f64 / 1e6).replace(".0M", "M"),
+    }
+}

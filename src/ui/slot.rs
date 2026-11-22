@@ -25,7 +25,11 @@ pub struct SlotFollower {
 
 impl SlotFollower {
     pub fn new(cx: &App, view: AnyView) -> Self {
-        let slot = cx.global::<PlayerSlot>().0.clone();
+        Self::with_slot(cx.global::<PlayerSlot>().0.clone(), view)
+    }
+
+    /// Follows any slot (e.g. the thumbnail being previewed).
+    pub fn with_slot(slot: Rc<Cell<Option<Bounds<Pixels>>>>, view: AnyView) -> Self {
         let laid_size = slot.get().map(|b| b.size);
         let child = laid_size.map(|s| div().w(s.width).h(s.height).child(view).into_any_element());
         Self { slot, child, laid_size }

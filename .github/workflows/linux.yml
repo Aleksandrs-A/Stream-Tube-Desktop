@@ -48,13 +48,71 @@ jobs:
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "file=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
 
+      - name: Build .deb and .rpm
+        id: native
+        run: |
+          sudo apt-get install -y --no-install-recommends ruby ruby-dev rpm dpkg-dev
+          sudo gem install --no-document fpm
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          # "0.2.0-alpha" -> "0.2.0~alpha", which both dpkg and rpm sort before "0.2.0"
+          pkgver=$(echo "$version" | sed 's/-/~/')
+
+          root=pkgroot
+          install -Dm755 target/release/streamtube "$root/usr/bin/streamtube"
+          strip "$root/usr/bin/streamtube"
+          install -Dm644 packaging/linux/streamtube.desktop "$root/usr/share/applications/streamtube.desktop"
+          install -Dm644 assets/logo.png "$root/usr/share/icons/hicolor/256x256/apps/streamtube.png"
+          install -Dm644 assets/logo.svg "$root/usr/share/icons/hicolor/scalable/apps/streamtube.svg"
+          install -Dm644 LICENSE "$root/usr/share/doc/streamtube/LICENSE"
+          install -Dm644 README.md "$root/usr/share/doc/streamtube/README.md"
+
+          # shared libraries the binary links against, as Debian package names
+          mkdir -p debian && echo "Source: streamtube" > debian/control
+          shlibs=$(dpkg-shlibdeps -O "$root/usr/bin/streamtube" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+          echo "linked libraries: $shlibs"
+          rm -rf debian
+
+          common=(
+            -s dir -C "$root" -n streamtube -v "$pkgver" -a x86_64
+            --license MIT --url "https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop"
+            --maintainer "Stream Tube <noreply@github.com>"
+            --description "Stream Tube - a fast native YouTube client with SponsorBlock, DeArrow and Return YouTube Dislike"
+            --category video
+            --after-install packaging/linux/postinst.sh --after-remove packaging/linux/postinst.sh
+          )
+
+          # video plays through libmpv, loaded at runtime
+          deb_deps=()
+          IFS=',' read -ra parts <<< "$shlibs"
+          for d in "${parts[@]}"; do d=$(echo "$d" | xargs); [ -n "$d" ] && deb_deps+=(--depends "$d"); done
+          fpm "${common[@]}" -t deb -p dist/ "${deb_deps[@]}" --depends "libmpv2 | libmpv1" --deb-recommends yt-dlp --deb-recommends ffmpeg usr
+
+          fpm "${common[@]}" -t rpm -p dist/ --rpm-autoreqprov --depends "(mpv-libs or libmpv2 or mpv)" usr
+
+          ls -l dist
+          deb=$(ls dist/*.deb); rpm=$(ls dist/*.rpm)
+          dpkg-deb --info "$deb"
+          rpm -qpR "$rpm"
+          echo "deb=$deb" >> "$GITHUB_OUTPUT"
+          echo "rpm=$rpm" >> "$GITHUB_OUTPUT"
+
+      - name: Check the .deb installs
+        run: |
+          sudo apt-get install -y "./${{ steps.native.outputs.deb }}"
+          test -x /usr/bin/streamtube
+          ls /usr/share/applications/streamtube.desktop
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
-          path: ${{ steps.pkg.outputs.file }}
+          path: |
+            ${{ steps.pkg.outputs.file }}
+            ${{ steps.native.outputs.deb }}
+            ${{ steps.native.outputs.rpm }}
 
       - name: Attach to the release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.pkg.outputs.file }}" --clobber
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" "${{ steps.pkg.outputs.file }}" "${{ steps.native.outputs.deb }}" "${{ steps.native.outputs.rpm }}" --clobber

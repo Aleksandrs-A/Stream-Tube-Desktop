@@ -85,12 +85,18 @@ pub fn apply_theme(window: Option<&mut Window>, cx: &mut App) {
         "system" => window.as_ref().map(|w| matches!(w.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark)).unwrap_or(true),
         _ => true,
     };
-    cx.set_global(Pal::new(dark, s.accent));
+    let p = Pal::new(dark, s.accent);
+    cx.set_global(p);
     gpui_kit::component::Theme::change(
         if dark { gpui_kit::component::ThemeMode::Dark } else { gpui_kit::component::ThemeMode::Light },
         window,
         cx,
     );
+    // text cursor, focus rings and selections follow the accent color
+    let t = gpui_kit::component::Theme::global_mut(cx);
+    t.caret = p.accent;
+    t.ring = p.accent;
+    t.selection = p.accent.opacity(0.35);
     cx.refresh_windows();
 }
 

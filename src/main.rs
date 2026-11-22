@@ -5,6 +5,7 @@ mod perf;
 mod downloads;
 mod feed;
 mod import;
+mod links;
 mod locale;
 mod player;
 mod store;
@@ -54,11 +55,19 @@ pub fn save_window_bounds(window: &Window) {
 fn main() {
     perf::init();
     store::init();
+    // one running app: a second launch (e.g. a clicked streamtube: link) hands over and exits
+    let arg = std::env::args().nth(1).unwrap_or_default();
+    if links::forward_to_running(&arg) {
+        return;
+    }
+    let incoming = links::listen();
+    links::register_scheme();
     gpui_kit::application()
         .with_assets(assets::Assets)
         .with_http_client(ui::UreqHttp::new())
         .run(|cx: &mut App| {
             gpui_kit::init(cx);
+            player::preview::init(cx);
             cx.set_global(ui::Pal::new(true, store::settings_snapshot().accent));
             ui::apply_theme(None, cx);
             player::controller::init(cx);
@@ -73,6 +82,25 @@ fn main() {
                 cx.new(|cx| ui::app::AppView::new(window, cx))
             })
             .expect("failed to open window");
+            if let Some(mut rx) = incoming {
+                cx.spawn(async move |cx| {
+                    use futures::StreamExt;
+                    while let Some(arg) = rx.next().await {
+                        let _ = cx.update(|cx| {
+                            let pip = ui::pip::handle(cx);
+                            let Some(main) = cx.windows().into_iter().find(|w| Some(*w) != pip) else { return };
+                            let _ = main.update(cx, |_, window, cx| {
+                                ui::app::restore_window(window);
+                                window.activate_window();
+                                if let Some(route) = ui::app::route_from_link(&arg) {
+                                    ui::app::navigate(route, window, cx);
+                                }
+                            });
+                        });
+                    }
+                })
+                .detach();
+            }
             cx.on_window_closed(|cx, _| {
                 // the picture-in-picture window alone doesn't keep the app running
                 let pip = ui::pip::handle(cx);

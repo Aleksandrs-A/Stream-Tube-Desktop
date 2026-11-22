@@ -9,3 +9,4 @@ Terminal=false
 Categories=AudioVideo;Video;Player;Network;
 Keywords=youtube;video;player;
 StartupWMClass=streamtube
+MimeType=x-scheme-handler/streamtube;
