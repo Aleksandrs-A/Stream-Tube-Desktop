@@ -190,7 +190,11 @@ pub fn sync_account_history(cx: &mut App) {
         return;
     }
     cx.spawn(async move |cx| {
-        let res = blocking(|| crate::api::auth::sync_history(3)).await;
+        let res = blocking(|| {
+            let _ = crate::api::auth::sync_search_history();
+            crate::api::auth::sync_history(3)
+        })
+        .await;
         if res.is_ok() {
             let _ = cx.update(|cx| {
                 cx.set_global(crate::ui::cards::Watched(store::progress_map()));
@@ -278,6 +282,8 @@ pub struct AppView {
     mini_view: Entity<PlayerView>,
     main_view: Entity<PlayerView>,
     preview_view: Entity<crate::player::preview::PreviewView>,
+    /// bounded cache for every thumbnail and avatar in this window
+    images: Entity<crate::ui::image_cache::LruImageCache>,
     had_video: bool,
     last_bounds_save: std::time::Instant,
     dialog: Option<Dialog>,
@@ -411,6 +417,7 @@ impl AppView {
         let mini_view = cx.new(|cx| PlayerView::new(p.clone(), true, cx));
         let main_view = cx.new(|cx| PlayerView::new(p.clone(), false, cx));
         let preview_view = cx.new(crate::player::preview::PreviewView::new);
+        let images = crate::ui::image_cache::init(cx);
         // re-render (to add or drop the preview layer) only when a preview starts or ends
         subs.push(cx.subscribe(&crate::player::preview::preview(cx), |_, _, _: &crate::player::preview::PreviewEvent, cx| cx.notify()));
         cx.set_global(crate::ui::slot::PlayerSlot::default());
@@ -459,6 +466,7 @@ impl AppView {
             mini_view,
             main_view,
             preview_view,
+            images,
             had_video: false,
             last_bounds_save: std::time::Instant::now(),
             dialog: None,
@@ -769,6 +777,7 @@ impl AppView {
         }
         cx.set_global(OpenMenu(None));
         crate::player::preview::stop(cx);
+        crate::ui::image_cache::on_navigate(cx);
         self.drawer_open = false;
         if route == self.route {
             // re-navigating to the same place refreshes it (like clicking Home again)
@@ -1522,6 +1531,7 @@ impl AppView {
                         d.child(
                             deferred(
                                 div()
+                                    .id("suggestions")
                                     .absolute()
                                     .top(px(44.))
                                     .left_0()
@@ -1903,37 +1913,87 @@ impl AppView {
             Status::Available(r) => (r, None),
             Status::Downloading(r, f) => (r, Some(f)),
             _ => {
-                return div().text_sm().text_color(p.text2).child("No update available").into_any_element();
+                return div().p_5().text_sm().text_color(p.text2).child("No update available").into_any_element();
             }
         };
         // release notes are Markdown; long ones are cut at a line break
-        let mut notes = rel.notes.replace("\r\n", "\n");
-        if notes.chars().count() > 900 {
-            let cut: String = notes.chars().take(900).collect();
+        let mut notes = strip_download_section(&rel.notes.replace("\r\n", "\n"));
+        if notes.chars().count() > 1400 {
+            let cut: String = notes.chars().take(1400).collect();
             notes = cut.rsplit_once('\n').map(|(a, _)| a.to_string()).unwrap_or(cut) + "\n\n…";
         }
         let has_installer = cfg!(windows) && rel.asset.is_some();
-        let size = rel.asset.as_ref().map(|a| a.2).filter(|s| *s > 0).map(|s| format!(" · {:.0} MB", s as f64 / 1_048_576.0)).unwrap_or_default();
-        let mut col = div()
+        let size = rel.asset.as_ref().map(|a| a.2).filter(|s| *s > 0).map(|s| format!("{:.0} MB", s as f64 / 1_048_576.0));
+        let version = rel.name.trim_start_matches("Stream Tube").trim().trim_start_matches('v').to_string();
+        let accent = crate::ui::app_icon::icon_accent(store::settings_snapshot().accent);
+        let [c0, _, c2] = crate::ui::app_icon::accent_stops(accent);
+        let mut meta = vec![format!("You have {}", crate::updater::current_version())];
+        if rel.prerelease {
+            meta.push("Pre-release".into());
+        }
+        if let Some(sz) = size {
+            meta.push(sz);
+        }
+
+        // hero: accent gradient, glowing logo, the new version in big type
+        let hero = div()
+            .relative()
             .flex()
             .flex_col()
-            .gap_3()
-            .child(div().flex().items_center().gap_2().child(icon("download").text_color(p.accent)).child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Update available")))
+            .items_center()
+            .gap_2()
+            .pt_8()
+            .pb_6()
+            .px_6()
+            .overflow_hidden()
+            .bg(linear_gradient(135., linear_color_stop(rgb(c0), 0.), linear_color_stop(rgb(c2), 1.)))
+            // soft light spots
+            .child(div().absolute().top(px(-60.)).left(px(-40.)).size(px(180.)).rounded_full().bg(hsla(0., 0., 1., 0.12)))
+            .child(div().absolute().bottom(px(-80.)).right(px(-30.)).size(px(220.)).rounded_full().bg(hsla(0., 0., 0., 0.12)))
             .child(
                 div()
-                    .text_sm()
-                    .text_color(p.text2)
-                    .child(format!("{}{} — you have {}{}", rel.name, if rel.prerelease { " (pre-release)" } else { "" }, crate::updater::current_version(), size)),
-            );
+                    .relative()
+                    .size(px(84.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div().absolute().inset_0().rounded_full().bg(hsla(0., 0., 1., 0.25)).with_animation(
+                            "upd-glow",
+                            Animation::new(std::time::Duration::from_millis(1800)).repeat().with_easing(pulsating_between(0.0, 1.0)),
+                            |d, t| d.opacity(0.25 + 0.55 * t),
+                        ),
+                    )
+                    .child(crate::ui::logo(px(64.))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .mt_2()
+                    .px_3()
+                    .py_0p5()
+                    .rounded_full()
+                    .bg(hsla(0., 0., 1., 0.18))
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(white())
+                    .child(icon("sparkles").size_3p5().text_color(white()))
+                    .child("New version"),
+            )
+            .child(div().text_3xl().font_weight(FontWeight::BOLD).text_color(white()).child(format!("Stream Tube {version}")))
+            .child(div().text_sm().text_color(hsla(0., 0., 1., 0.85)).child(meta.join("  ·  ")));
+
+        let mut body = div().flex().flex_col().gap_4().p_6();
         if !notes.trim().is_empty() {
-            col = col.child(
+            body = body.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text2).child("WHAT'S NEW")).child(
                 div()
                     .id("upd-notes")
-                    .max_h(px(260.))
+                    .when(notes.len() > 280, |d| d.h(px(230.)))
+                    .flex_none()
                     .overflow_y_scroll()
-                    .p_3()
-                    .rounded_lg()
-                    .bg(p.hover)
+                    .pr_2()
                     .text_sm()
                     .text_color(p.text)
                     .child(gpui_kit::base::TextView::markdown("upd-notes-md", notes).on_link_click(|url, _, _, _| {
@@ -1942,42 +2002,105 @@ impl AppView {
             );
         }
         if let Some(f) = progress {
-            col = col
-                .child(div().w_full().h(px(6.)).rounded_full().bg(p.hover).child(div().h_full().rounded_full().w(relative(f.clamp(0.0, 1.0))).bg(p.accent)))
-                .child(div().text_xs().text_color(p.text2).child(format!("Downloading… {:.0}%", f * 100.0)));
-            return col.into_any_element();
+            let f = f.clamp(0.0, 1.0);
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .text_sm()
+                            .child(div().text_color(p.text).font_weight(FontWeight::MEDIUM).child(if f >= 0.999 { "Installing…" } else { "Downloading…" }))
+                            .child(div().text_color(p.text2).child(format!("{:.0}%", f * 100.0))),
+                    )
+                    .child(
+                        div().relative().w_full().h(px(8.)).rounded_full().overflow_hidden().bg(p.hover).child(
+                            div()
+                                .relative()
+                                .h_full()
+                                .rounded_full()
+                                .w(relative(f.max(0.02)))
+                                .bg(linear_gradient(90., linear_color_stop(rgb(c0), 0.), linear_color_stop(rgb(c2), 1.)))
+                                .overflow_hidden()
+                                // moving shine
+                                .child(
+                                    div().absolute().top_0().bottom_0().w(px(60.)).bg(linear_gradient(
+                                        90.,
+                                        linear_color_stop(hsla(0., 0., 1., 0.), 0.),
+                                        linear_color_stop(hsla(0., 0., 1., 0.45), 1.),
+                                    ))
+                                    .with_animation(
+                                        "upd-shine",
+                                        Animation::new(std::time::Duration::from_millis(1200)).repeat(),
+                                        |d, t| d.left(relative(-0.3 + 1.3 * t)),
+                                    ),
+                                ),
+                        ),
+                    )
+                    .child(div().text_xs().text_color(p.text2).child("Stream Tube restarts by itself when it's done.")),
+            );
+            return div().flex().flex_col().child(hero).child(body).into_any_element();
         }
-        col.child(
+        body = body.child(
             div()
                 .flex()
-                .justify_end()
-                .gap_2()
-                .child(pill("upd-skip", None, "Skip this version", cx).on_click(cx.listener(|this, _, _, cx| {
-                    crate::updater::skip(cx);
-                    this.dialog = None;
-                    cx.notify();
-                })))
-                .child(pill("upd-later", None, "Later", cx).on_click(cx.listener(|this, _, _, cx| {
-                    this.dialog = None;
-                    cx.notify();
-                })))
-                .child(pill("upd-go", Some("download"), if has_installer { "Update now" } else { "Download" }, cx).bg(p.accent).text_color(white()).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        if !has_installer {
+                .items_center()
+                .justify_between()
+                .pt_1()
+                .child(
+                    div()
+                        .flex()
+                        .gap_4()
+                        .text_sm()
+                        .text_color(p.text2)
+                        .child(div().id("upd-skip").cursor_pointer().hover(|s| s.text_color(p.text)).child("Skip this version").on_click(cx.listener(|this, _, _, cx| {
+                            crate::updater::skip(cx);
                             this.dialog = None;
-                        }
-                        crate::updater::install(cx);
-                        cx.notify();
-                    },
-                ))),
-        )
-        .into_any_element()
+                            cx.notify();
+                        })))
+                        .child(div().id("upd-later").cursor_pointer().hover(|s| s.text_color(p.text)).child("Later").on_click(cx.listener(|this, _, _, cx| {
+                            this.dialog = None;
+                            cx.notify();
+                        }))),
+                )
+                .child(
+                    div()
+                        .id("upd-go")
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .h(px(44.))
+                        .px_6()
+                        .rounded_full()
+                        .cursor_pointer()
+                        .bg(linear_gradient(90., linear_color_stop(rgb(c0), 0.), linear_color_stop(rgb(c2), 1.)))
+                        .shadow_lg()
+                        .hover(|s| s.opacity(0.92))
+                        .active(|s| s.opacity(0.8))
+                        .text_color(white())
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(icon(if has_installer { "download" } else { "external-link" }).size_4().text_color(white()))
+                        .child(if has_installer { "Update now" } else { "Download" })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !has_installer {
+                                this.dialog = None;
+                            }
+                            crate::updater::install(cx);
+                            cx.notify();
+                        })),
+                ),
+        );
+        div().flex().flex_col().child(hero).child(body).into_any_element()
     }
 
     fn render_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = pal(cx);
         let d = self.dialog.as_ref()?;
         let wide = matches!(d, Dialog::SignIn);
+        let hero = matches!(d, Dialog::Update);
         let body: AnyElement = match d {
             Dialog::SignIn => self.render_sign_in(cx),
             Dialog::SaveToPlaylist(v) => {
@@ -2108,15 +2231,21 @@ impl AppView {
                     .child(
                         div()
                             .id("dialog")
-                            .w(px(if wide { 420. } else { 380. }))
-                            .max_h(px(520.))
-                            .overflow_y_scroll()
-                            .p_5()
-                            .rounded_xl()
+                            .w(px(if hero { 520. } else if wide { 420. } else { 380. }))
+                            .max_h(px(if hero { 640. } else { 520. }))
+                            .when(!hero, |d| d.overflow_y_scroll().p_5())
+                            .when(hero, |d| d.overflow_hidden())
+                            .rounded(px(if hero { 20. } else { 12. }))
                             .bg(p.surface2)
                             .shadow_2xl()
                             .on_click(|_, _, cx| cx.stop_propagation())
-                            .child(body),
+                            .child(body)
+                            // open: fade in while rising a little
+                            .with_animation(
+                                "dialog-in",
+                                Animation::new(std::time::Duration::from_millis(220)).with_easing(ease_out_quint()),
+                                |d, t| d.opacity(t).mt(px((1. - t) * 18.)),
+                            ),
                     ),
             )
             .with_priority(4)
@@ -2134,6 +2263,7 @@ impl AppView {
             .flex_col()
             .gap_2()
             .children(toasts.into_iter().map(|t| {
+                let anim_id = SharedString::from(format!("toast-in-{}", t.id));
                 div()
                     .flex()
                     .items_center()
@@ -2176,6 +2306,11 @@ impl AppView {
                                 cx.refresh_windows();
                             })
                     }))
+                .with_animation(
+                    anim_id,
+                    Animation::new(std::time::Duration::from_millis(240)).with_easing(ease_out_quint()),
+                    |d, t| d.opacity(t).ml(px((1. - t) * -24.)),
+                )
             }))
     }
 }
@@ -2222,6 +2357,7 @@ impl Render for AppView {
         }
         let fullscreen = ui.fullscreen && is_watch;
         let mut root = div()
+            .image_cache(self.images.clone())
             .id("app-root")
             .track_focus(&self.focus)
             .key_context("StreamTube")
@@ -2246,7 +2382,17 @@ impl Render for AppView {
         let page_area = div()
             .relative()
             .overflow_hidden()
-            .child(self.page.clone().cached(StyleRefinement::default().size_full()))
+            .child(
+                // each newly shown page fades in; the animation stops after 160 ms
+                div()
+                    .size_full()
+                    .child(self.page.clone().cached(StyleRefinement::default().size_full()))
+                    .with_animation(
+                        SharedString::from(format!("page-in-{}", self.page.entity_id())),
+                        Animation::new(std::time::Duration::from_millis(160)).with_easing(ease_out_quint()),
+                        |d, t| d.opacity(0.35 + 0.65 * t),
+                    ),
+            )
             .when(has_slot, |d| d.child(crate::ui::slot::SlotFollower::new(cx, self.main_view.clone().into())))
             .when(crate::player::preview::showing(cx).is_some(), |d| {
                 let slot = cx.global::<crate::player::preview::PreviewSlot>().0.clone();
@@ -2298,6 +2444,21 @@ pub fn toggle_maximize(window: &mut Window) {
             }
         }
     }
+}
+
+/// Release notes without their "Download" section (the app installs the update itself).
+fn strip_download_section(notes: &str) -> String {
+    let mut out = Vec::new();
+    let mut skipping = false;
+    for line in notes.lines() {
+        if line.starts_with("## ") {
+            skipping = line.trim_start_matches('#').trim().eq_ignore_ascii_case("download");
+        }
+        if !skipping {
+            out.push(line);
+        }
+    }
+    out.join("\n").trim().to_string()
 }
 
 /// Brings a minimized window back (leaves maximized/normal windows as they are).

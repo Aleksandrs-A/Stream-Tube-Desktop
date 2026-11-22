@@ -218,7 +218,7 @@ fn row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
                 .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.text).child(title.to_string()))
                 .when(!desc.is_empty(), |d| d.child(div().text_xs().text_color(p.text2).child(desc.to_string()))),
         )
-        .child(control)
+        .child(div().flex_none().child(control))
 }
 
 fn switch(id: &'static str, on: bool, set: fn(&mut Settings, bool), cx: &App) -> impl IntoElement {
@@ -287,6 +287,7 @@ fn accent_swatches(cur: u32, cx: &App) -> Div {
                 .on_click(move |_, window, cx| {
                     store::update_settings(|s| s.accent = c);
                     after_change("accent", window, cx);
+                    crate::ui::app_icon::apply(cx);
                 }),
         );
     }
@@ -381,6 +382,11 @@ impl SettingsPage {
                         })),
                 );
             }
+            let list = list.with_animation(
+                SharedString::from(format!("{id}-in")),
+                Animation::new(std::time::Duration::from_millis(140)).with_easing(ease_out_quint()),
+                |d, t| d.opacity(t).mt(px((1. - t) * -6.)),
+            );
             el = el.child(deferred(div().absolute().top(px(40.)).left_0().w_full().child(list)).with_priority(5));
         }
         el.into_any_element()
@@ -395,11 +401,31 @@ impl SettingsPage {
 
     fn premium(&self, cx: &mut Context<Self>) -> Div {
         let s = store::settings_snapshot();
+        let p = pal(cx);
+        let note = QUERY.with(|q| q.borrow().is_empty()).then(|| {
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .mb_1()
+                .px_4()
+                .py_3()
+                .rounded_lg()
+                .bg(p.accent.opacity(0.12))
+                .child(icon("sparkles").size_5().text_color(p.accent))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(p.text)
+                        .child("These are built into Stream Tube, so they work without YouTube Premium and without signing in."),
+                )
+        });
         card(cx)
+            .children(note)
             .child(row("Background play", "Keep playing when the window is minimized (off: pause, resume on restore)", switch("bgp", s.background_play, |s, v| s.background_play = v, cx), cx))
             .child(row("Most replayed graph", "Heat line above the seek bar", switch("heat", s.show_heatmap, |s, v| s.show_heatmap = v, cx), cx))
             .child(row("Jump ahead", "Button to skip to the most replayed part", switch("jump", s.jump_ahead, |s, v| s.jump_ahead = v, cx), cx))
-            .child(row("Enhanced bitrate", "Prefer the highest-bitrate variant of a quality", switch("ebr", s.enhanced_bitrate, |s, v| s.enhanced_bitrate = v, cx), cx))
+            .child(row("Enhanced bitrate", "Picks the highest-bitrate stream YouTube offers for the chosen quality", switch("ebr", s.enhanced_bitrate, |s, v| s.enhanced_bitrate = v, cx), cx))
             .child(row("Ambient mode", "Soft glow of the video's colors around the player", switch("amb", s.ambient_mode, |s, v| s.ambient_mode = v, cx), cx))
             .child(row("Force original audio", "Play the original language instead of auto-dubbed tracks", switch("orig", s.original_audio, |s, v| s.original_audio = v, cx), cx))
     }
@@ -438,15 +464,6 @@ impl SettingsPage {
             .child(row("Density", "", self.choice("density", &[("compact".to_string(), "Compact"), ("default".to_string(), "Default"), ("comfortable".to_string(), "Comfortable")], s.density.clone(), |s, v| s.density = v, cx), cx))
             .child(row("Thumbnail corners", "", self.choice("radius", &[(0.0f32, "Square"), (6.0, "Small"), (12.0, "Rounded"), (18.0, "Large")], s.thumb_radius, |s, v| s.thumb_radius = v, cx), cx))
             .child(row("Grid columns", "", self.choice("cols", &[(0u32, "Auto"), (3, "3"), (4, "4"), (5, "5"), (6, "6")], s.grid_columns, |s, v| s.grid_columns = v, cx), cx))
-            .child(row(
-                "Open YouTube links in Stream Tube",
-                "Add this as a browser bookmark. Clicking it on any YouTube page opens that video, channel or playlist here. streamtube:// links open here too.",
-                pill("bm-copy", Some("bookmark"), "Copy bookmark", cx).on_click(|_, _, cx| {
-                    copy_to_clipboard(crate::links::BOOKMARKLET.to_string(), cx);
-                    toast(cx, "Copied: make a new bookmark and paste this as its URL");
-                }),
-                cx,
-            ))
             .child(row("Play videos on hover", "Muted preview when the pointer rests on a thumbnail", switch("hovp", s.hover_preview, |s, v| s.hover_preview = v, cx), cx))
             .child(row("Region", "Trending, Explore and search results", self.dropdown("dd-region", crate::locale::REGIONS, s.region.clone(), |s, v| s.region = v, cx), cx))
             .child(row("Language", "Titles, dates and YouTube's text", self.dropdown("dd-lang", crate::locale::LANGUAGES, s.language.clone(), |s, v| s.language = v, cx), cx))
@@ -498,9 +515,9 @@ impl SettingsPage {
                     .child(text_field(&self.input("sb_user_id"), 260., cx))
                     .when(!s.sb_user_id.is_empty(), |d| {
                         let id = s.sb_user_id.clone();
-                        d.child(icon_button("sbid-copy", "copy", cx).on_click(move |_, _, cx| {
+                        d.child(pill("sbid-copy", Some("copy"), "Copy", cx).on_click(move |_, _, cx| {
                             copy_to_clipboard(id.clone(), cx);
-                            toast(cx, "Copied");
+                            toast(cx, "Private ID copied");
                         }))
                     })
                     .child(pill("sbid-gen", Some("key-round"), "Generate", cx).on_click(cx.listener(|this, _, window, cx| {
@@ -731,9 +748,23 @@ impl SettingsPage {
         let s = store::settings_snapshot();
         card(cx)
             .child(row(
-                "Stream backend",
-                "",
-                self.choice("sb2", &[("auto".to_string(), "Auto"), ("innertube".to_string(), "Built-in only"), ("ytdlp".to_string(), "yt-dlp only")], s.stream_backend.clone(), |s, v| s.stream_backend = v, cx),
+                "Playback client",
+                "Which YouTube app Stream Tube presents itself as to get video streams. Try another one if videos stop playing or fail to load.",
+                self.choice(
+                    "sb2",
+                    &[
+                        ("auto".to_string(), "Auto (recommended)"),
+                        ("visionos".to_string(), "visionOS"),
+                        ("android_vr".to_string(), "Android VR"),
+                        ("ytdlp".to_string(), "yt-dlp"),
+                    ],
+                    if s.stream_backend == "innertube" { "visionos".to_string() } else { s.stream_backend.clone() },
+                    |s, v| {
+                        s.stream_backend = v;
+                        crate::api::streams::clear_cache();
+                    },
+                    cx,
+                ),
                 cx,
             ))
             .child(row(

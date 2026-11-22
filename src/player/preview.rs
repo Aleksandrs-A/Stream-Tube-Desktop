@@ -26,6 +26,9 @@ pub struct Preview {
     /// playback position and length of the preview, in seconds
     pub pos: f64,
     pub dur: f64,
+    /// frames are shown only once the current file has started; until then mpv may
+    /// still hand over frames of the previously hovered video
+    ready: bool,
 }
 
 pub enum PreviewEvent {
@@ -44,7 +47,7 @@ pub struct PreviewSlot(pub Rc<Cell<Option<Bounds<Pixels>>>>);
 impl Global for PreviewSlot {}
 
 pub fn init(cx: &mut App) {
-    let e = cx.new(|_| Preview { mpv: None, id: None, frame: None, old: Vec::new(), serial: 0, pos: 0.0, dur: 0.0 });
+    let e = cx.new(|_| Preview { mpv: None, id: None, frame: None, old: Vec::new(), serial: 0, pos: 0.0, dur: 0.0, ready: false });
     cx.set_global(PreviewHandle(e));
     cx.set_global(PreviewSlot::default());
 }
@@ -118,11 +121,27 @@ pub fn stop(cx: &mut App) {
     if cx.try_global::<PreviewHandle>().is_none() {
         return;
     }
-    preview(cx).update(cx, |p, cx| {
+    let serial = preview(cx).update(cx, |p, cx| {
         p.serial += 1;
         p.id = None;
         p.clear(cx);
+        p.serial
     });
+    // no preview for a while: close the preview player to give its memory back
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_secs(20)).await;
+        let _ = cx.update(|cx| {
+            preview(cx).update(cx, |p, _| {
+                if p.serial == serial {
+                    if let Some(m) = p.mpv.take() {
+                        // shutting mpv down waits for its threads; keep that off the UI thread
+                        std::thread::spawn(move || drop(m));
+                    }
+                }
+            })
+        });
+    })
+    .detach();
 }
 
 impl Preview {
@@ -144,6 +163,7 @@ impl Preview {
         }
         self.pos = 0.0;
         self.dur = 0.0;
+        self.ready = false;
         let had = self.frame.is_some();
         if let Some(f) = self.frame.take() {
             self.old.push(f);
@@ -186,7 +206,7 @@ impl Preview {
             ("sws-scaler", "fast-bilinear"),
             ("framedrop", "vo"),
         ];
-        if !proxy.trim().is_empty() {
+        if store::mpv_http_proxy(&proxy) {
             opts.push(("http-proxy", proxy.as_str()));
         }
         let m = Mpv::new(&opts, move |ev| {
@@ -199,11 +219,25 @@ impl Preview {
             use futures::StreamExt;
             let mut rx = rx;
             while let Some(ev) = rx.next().await {
-                let mut frame = matches!(ev, MpvEvent::Frame);
-                while let Ok(e) = rx.try_recv() {
-                    frame |= matches!(e, MpvEvent::Frame);
+                let mut frame = false;
+                let mut started = false;
+                for e in std::iter::once(ev).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+                    match e {
+                        MpvEvent::Frame => frame = true,
+                        MpvEvent::PlaybackRestart => started = true,
+                        MpvEvent::Shutdown => return,
+                        _ => {}
+                    }
                 }
-                if frame && this.update(cx, |p, cx| p.on_frame(cx)).is_err() {
+                let ok = this.update(cx, |p, cx| {
+                    if started {
+                        p.ready = p.id.is_some();
+                    }
+                    if frame {
+                        p.on_frame(cx);
+                    }
+                });
+                if ok.is_err() {
                     break;
                 }
             }
@@ -227,12 +261,17 @@ impl Preview {
         };
         let Some(src) = src else { return };
         let Some(m) = self.ensure_mpv(cx) else { return };
+        self.ready = false;
         let _ = m.command(&["loadfile", &src, "replace", "-1", "pause=no"]);
     }
 
     fn on_frame(&mut self, cx: &mut Context<Self>) {
         let Some(m) = &self.mpv else { return };
         let Some(f) = m.take_frame() else { return };
+        if !self.ready {
+            // a late frame of the previous video
+            return;
+        }
         self.pos = m.get_f64("time-pos").unwrap_or(self.pos);
         self.dur = m.get_f64("duration").unwrap_or(self.dur);
         if self.id.is_none() {
@@ -299,7 +338,8 @@ impl Render for PreviewView {
         };
         let frac = if dur > 0.0 { (pos / dur).clamp(0.0, 1.0) as f32 } else { 0.0 };
         let scrubbing = self.scrubbing;
-        div().id("preview").group("preview").relative().size_full().rounded(radius).overflow_hidden().when_some(frame, |d, f| {
+        let fade_id = SharedString::from(format!("preview-in-{}", self.preview.read(cx).id.clone().unwrap_or_default()));
+        let el = div().id("preview").group("preview").relative().size_full().rounded(radius).overflow_hidden().when_some(frame, |d, f| {
             d.bg(black())
                 .child(img(ImageSource::Render(f)).size_full().object_fit(ObjectFit::Cover))
                 // time left, bottom right (like the duration badge it covers)
@@ -362,7 +402,8 @@ impl Render for PreviewView {
                             .group("preview-seek-g"),
                     )
                 })
-        })
+        });
+        el.with_animation(fade_id, Animation::new(std::time::Duration::from_millis(200)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
     }
 }
 

@@ -278,6 +278,9 @@ fn run_job(job: &Job, cancel: &AtomicBool, progress: &dyn Fn(f32, &str)) -> anyh
 fn ytdlp_run(bin: &str, dir: &std::path::Path, url: &str, fmt: &str, s: &store::Settings, cancel: &AtomicBool, progress: &dyn Fn(f32, &str)) -> anyhow::Result<String> {
     {
         let mut cmd = Command::new(bin);
+        if let Some(p) = crate::store::proxy_setting() {
+            cmd.arg("--proxy").arg(p);
+        }
         if let Some(ff) = ffmpeg_path().filter(|f| f != "ffmpeg") {
             cmd.arg("--ffmpeg-location").arg(ff);
         }

@@ -53,6 +53,12 @@ pub fn save_window_bounds(window: &Window) {
 }
 
 fn main() {
+    // the local stream proxy must never be reached through the user's proxy
+    // SAFETY: set before any other thread starts
+    unsafe {
+        std::env::set_var("no_proxy", "127.0.0.1,localhost,::1");
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost,::1");
+    }
     perf::init();
     store::init();
     // one running app: a second launch (e.g. a clicked streamtube: link) hands over and exits
@@ -61,7 +67,6 @@ fn main() {
         return;
     }
     let incoming = links::listen();
-    links::register_scheme();
     gpui_kit::application()
         .with_assets(assets::Assets)
         .with_http_client(ui::UreqHttp::new())
@@ -82,6 +87,7 @@ fn main() {
                 cx.new(|cx| ui::app::AppView::new(window, cx))
             })
             .expect("failed to open window");
+            ui::app_icon::apply(cx);
             if let Some(mut rx) = incoming {
                 cx.spawn(async move |cx| {
                     use futures::StreamExt;

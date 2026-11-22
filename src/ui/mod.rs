@@ -1,5 +1,7 @@
 pub mod app;
+pub mod app_icon;
 pub mod cards;
+pub mod image_cache;
 pub mod pages;
 pub mod pip;
 pub mod slot;
@@ -327,7 +329,7 @@ pub fn avatar(url: Option<&str>, size: Pixels, name: &str, cx: &App) -> AnyEleme
         return div().size(size).flex_none().into_any_element();
     }
     match url {
-        Some(u) if !u.is_empty() => img(SharedString::from(u.to_string()))
+        Some(u) if !u.is_empty() => img(SharedString::from(crate::api::json::limit_avatar(u)))
             .size(size)
             .flex_none()
             .rounded_full()
@@ -361,8 +363,10 @@ pub const BRAND_PINK: u32 = 0xF0307E;
 pub const BRAND_VIOLET: u32 = 0x7A3CF5;
 
 /// The Stream Tube app logo.
+/// The logo, in the current accent colour.
 pub fn logo(size: Pixels) -> Img {
-    img("brand/logo.svg").size(size).flex_none()
+    let accent = app_icon::icon_accent(crate::store::settings_snapshot().accent);
+    img(SharedString::from(format!("brand/logo-{accent:06x}.svg"))).size(size).flex_none()
 }
 
 /// "Stream Tube" wordmark next to the logo.
@@ -375,5 +379,5 @@ pub fn wordmark(cx: &App) -> Div {
         .text_lg()
         .font_weight(FontWeight::BOLD)
         .child(div().text_color(p.text).child("Stream"))
-        .child(div().text_color(rgb(BRAND_PINK)).child("Tube"))
+        .child(div().text_color(p.accent).child("Tube"))
 }

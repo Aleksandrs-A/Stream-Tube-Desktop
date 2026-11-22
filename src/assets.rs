@@ -16,6 +16,11 @@ impl AssetSource for Assets {
         if path == "brand/logo.svg" {
             return Ok(Some(Cow::Borrowed(include_bytes!("../assets/logo.svg"))));
         }
+        if let Some(hex) = path.strip_prefix("brand/logo-").and_then(|p| p.strip_suffix(".svg")) {
+            if let Ok(accent) = u32::from_str_radix(hex, 16) {
+                return Ok(Some(Cow::Owned(crate::ui::app_icon::logo_svg(accent).into_bytes())));
+            }
+        }
         if let Some((_, body)) = EXTRA.iter().find(|(p, _)| *p == path) {
             return Ok(Some(Cow::Owned(format!("{SVG_HEAD}{body}</svg>").into_bytes())));
         }

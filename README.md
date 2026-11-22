@@ -32,63 +32,75 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 ## What it does
 
 **Watching**
-- Home, Shorts, Subscriptions, Explore categories, channels, playlists and search
-- libmpv player with hardware decoding, codec preference, speed control (remembered per channel if you want), captions and seek-bar preview thumbnails
-- Resumes where you left off, a miniplayer while you browse, and a picture-in-picture window
-- Keeps playing when minimized, has an audio-only mode, or can hand a video off to an external player
+- Home, Shorts, Subscriptions, Explore categories, channels, playlists and search, with search suggestions and your recent searches
+- libmpv player with hardware decoding, codec preference (AV1, VP9 or H.264), 360p up to 4K, enhanced bitrate, speed control (remembered per channel if you want), captions with adjustable size and background, chapters and seek-bar preview thumbnails
+- Resumes where you left off, remembers your last quality, autoplays the next video or loops, and plays whole playlists as a queue
+- A miniplayer while you browse, a picture-in-picture window, theater mode and fullscreen
+- Keeps playing when minimized, or pauses and resumes when you come back
 - Live streams with live chat (Top chat or every message), and chatting when signed in
+- Shorts in a vertical player that moves to the next one by itself, or open them in the regular player
 - Hold Space or press and hold on the video to play at 2x
 - Hover previews: rest the pointer on a thumbnail and it plays inside it, muted, with a seek bar to skip around
 - Most replayed graph with "jump ahead", ambient glow around the player, force original audio instead of auto-dubbing
+- Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous)
+- Can hand a video off to an external player such as mpv or VLC
+
+**Saves data**
+- Audio only mode fetches just the audio stream, so podcasts, music and talks use a fraction of the data
+- Pick a lower default quality, and turn off hover previews or seek-bar thumbnails if you're on a metered connection
+
+**Premium features, free**
+- No ads, background play, picture-in-picture, downloads, jump ahead and enhanced bitrate all work without YouTube Premium and without signing in
 
 **Less noise**
 - SponsorBlock with per-category behaviour: skip automatically, ask, only mark it on the seek bar, or ignore
 - Use your own SponsorBlock private ID and see your contribution stats (segments, skips by others, time saved)
 - DeArrow titles and thumbnails, so you see what a video is actually about
 - Return YouTube Dislike counts
-- Hide Shorts, live streams, premieres, comments, related videos, view counts and more
+- Hide Shorts, live streams, premieres, watched videos, comments, related videos, description, chapters, channel avatars, view counts and Explore
 - Block channels or keywords from every feed
 
 **Your data stays yours**
 - Subscriptions can live locally. The feed is built by fetching each channel directly, no account needed
 - Or sign in with your Google account to get your own Home feed, subscriptions, playlists, likes and subscribe button
-- Watch history from your other devices syncs in with resume positions, and single entries can be removed
-- History, watch later, favourites and playlists are stored in a local SQLite database
+- Watch history and search history from your other devices sync in, with resume positions, and single entries can be removed
+- History, watch later, favourites and playlists are stored in a local SQLite database, and you can pause or clear history at any time
 - Import from YouTube Takeout, NewPipe, FreeTube or OPML. Export to NewPipe JSON, YouTube CSV, OPML or a full backup
 
 **Downloads**
-- Download video or audio in any quality through yt-dlp, with SponsorBlock chapters
+- Download video or audio in any quality through yt-dlp, with SponsorBlock chapters, from a download manager with progress
 - Without yt-dlp it falls back to the built-in downloader (360p/720p or audio)
+
+**Network**
+- A proxy setting (HTTP or SOCKS) that covers browsing, playback, thumbnails, downloads and sign-in
+- IPv4-only mode, and a choice of playback client (visionOS, Android VR or yt-dlp) if videos ever stop loading
 
 **Looks the way you like**
 - Dark, light or follow Windows
-- Seven accent colours used across the app, interface scaling, density, thumbnail corner style and grid columns
+- Seven accent colours used across the app, and the app icon changes colour to match, on the taskbar and on your desktop shortcuts too
+- Interface scaling, density, thumbnail corner style, grid columns, start page, language and region
+- Smooth page, dialog and menu transitions
 
-**Opens YouTube links**
-- `streamtube://` links open in the app, and a browser bookmark (*Settings → General*) sends the YouTube page you're on to Stream Tube
-- Links opened while the app is running reuse the open window
+**Keeps itself up to date**
+- Checks for new releases at startup and installs them in one click, and can update yt-dlp for you
 
 ## Performance
 
 Stream Tube versus youtube.com in Microsoft Edge (clean profile, no extensions) on
-the same Windows 11 PC, playing the same video. Numbers are averaged over ten
-seconds and add up every process involved.
+the same Windows 11 PC, playing the same video. Numbers are the working set of
+every process involved, after browsing a few pages.
 
-| | youtube.com in Edge | Stream Tube 0.2.0-alpha |
+| | youtube.com in Edge | Stream Tube 0.3.0-alpha |
 |---|---|---|
 | Processes | 11–12 | 1 |
-| RAM, idle on Home (working set) | 1,073 MB | **302 MB** |
-| RAM, idle on Home (private) | 670 MB | **333 MB** |
-| RAM, playing a video (working set) | 1,203 MB | **507 MB** |
-| RAM, playing a video (private) | 769 MB | **545 MB** |
-| CPU while playing | ~0.7% | ~1.6% |
+| RAM, idle on Home | 1,073 MB | **~405 MB** |
+| RAM, playing a video | 1,203 MB | **~565 MB** |
 
-Idle, Stream Tube uses about a third of the RAM the browser needs for the same page.
-While playing it uses well under half. Much of that is a read-ahead buffer (up to
-200 MB) that keeps seeking instant. The browser uses less CPU in this test because
-it decodes video on the GPU by default. Turn on *Settings → Player → Hardware
-decoding* to do the same in Stream Tube. Results depend on the video, resolution
-and hardware.
+Stream Tube uses less than half the RAM of the browser, and it stays flat as you
+browse: thumbnails are kept at the size they're drawn and the ones you've scrolled
+past are freed. While playing, part of the memory is a read-ahead buffer that keeps
+seeking instant. Turn on *Settings → Player → Hardware decoding* to decode video on
+the GPU like the browser does. Results depend on the video, resolution and hardware.
 
 ## Screenshots
 
@@ -123,13 +135,13 @@ release comes out (*Settings → About*).
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.2.0-alpha_amd64.deb
+sudo apt install ./streamtube_0.3.0-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.2.0-alpha.x86_64.rpm
+sudo dnf install ./streamtube-0.3.0-alpha.x86_64.rpm
 ```
 
 **Other Linux (x86_64)**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
@@ -171,7 +183,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.2.0-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.3.0-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in

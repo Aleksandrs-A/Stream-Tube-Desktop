@@ -240,6 +240,12 @@ pub fn ip_family() -> ureq::config::IpFamily {
     if settings_snapshot().ipv4_only { ureq::config::IpFamily::Ipv4Only } else { ureq::config::IpFamily::Any }
 }
 
+/// Whether mpv can use this proxy itself (it only speaks HTTP proxies).
+pub fn mpv_http_proxy(p: &str) -> bool {
+    let p = p.trim().to_ascii_lowercase();
+    p.starts_with("http://") || p.starts_with("https://")
+}
+
 pub fn proxy_setting() -> Option<String> {
     let p = settings_snapshot().proxy.clone();
     (!p.trim().is_empty()).then_some(p)
@@ -564,6 +570,15 @@ pub fn search_history(prefix: &str, limit: usize) -> Vec<String> {
         .unwrap()
         .filter_map(Result::ok)
         .collect()
+}
+
+/// Adds searches made on other devices without moving existing entries;
+/// `at` is when they should sort (older than anything searched here).
+pub fn search_history_merge_remote(q: &str, at: i64) -> bool {
+    if !settings_snapshot().search_history_enabled || q.trim().is_empty() {
+        return false;
+    }
+    db().lock().execute("INSERT OR IGNORE INTO search_history VALUES (?1, ?2)", params![q.trim(), at]).map(|n| n > 0).unwrap_or(false)
 }
 
 pub fn search_history_remove(q: &str) {

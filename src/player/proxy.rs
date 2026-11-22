@@ -329,13 +329,18 @@ fn serve_pass(conn: &mut TcpStream, url: &str, range: Option<(u64, Option<u64>)>
 fn agent() -> &'static ureq::Agent {
     static A: OnceLock<ureq::Agent> = OnceLock::new();
     A.get_or_init(|| {
-        ureq::Agent::config_builder()
+        let mut b = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .ip_family(crate::store::ip_family())
             .timeout_connect(Some(std::time::Duration::from_secs(10)))
-            .timeout_recv_body(Some(std::time::Duration::from_secs(30)))
-            .build()
-            .new_agent()
+            .timeout_recv_body(Some(std::time::Duration::from_secs(30)));
+        // video data goes through the user's proxy too (HTTP or SOCKS)
+        if let Some(p) = crate::store::proxy_setting() {
+            if let Ok(proxy) = ureq::Proxy::new(&p) {
+                b = b.proxy(Some(proxy));
+            }
+        }
+        b.build().new_agent()
     })
 }
 

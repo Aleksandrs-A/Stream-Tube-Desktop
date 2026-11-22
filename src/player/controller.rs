@@ -170,9 +170,9 @@ impl Player {
             ("input-vo-keyboard", "no"),
             ("osc", "no"),
             ("cache", "yes"),
-            ("demuxer-max-bytes", "200MiB"),
-            ("demuxer-max-back-bytes", "64MiB"),
-            ("demuxer-readahead-secs", "60"),
+            ("demuxer-max-bytes", "96MiB"),
+            ("demuxer-max-back-bytes", "24MiB"),
+            ("demuxer-readahead-secs", "40"),
             ("network-timeout", "20"),
             ("user-agent", ua),
             ("volume", &vol),
@@ -196,7 +196,10 @@ impl Player {
         let opts: Vec<(&str, &str)> = opts.into_iter().collect();
         let proxy = s.proxy.clone();
         let mut opts_owned: Vec<(String, String)> = opts.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
-        if !proxy.trim().is_empty() {
+        // normal videos reach mpv through the app's local stream proxy, which already
+        // uses the user's proxy; mpv itself only fetches live streams directly, and can
+        // only use HTTP proxies (127.0.0.1 is excluded through no_proxy, see main)
+        if crate::store::mpv_http_proxy(&proxy) {
             opts_owned.push(("http-proxy".into(), proxy));
         }
         if let Ok(f) = std::env::var("STREAMTUBE_MPV_LOG") {

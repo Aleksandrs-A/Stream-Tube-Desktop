@@ -1,5 +1,5 @@
-//! Opening YouTube links in the app: the `streamtube://` link scheme, and a single
-//! running instance (a second launch hands its link to the first and exits).
+//! A single running instance: a second launch (e.g. with a YouTube link on the
+//! command line) hands its argument to the first and exits.
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
@@ -85,40 +85,6 @@ pub fn listen() -> Option<futures::channel::mpsc::UnboundedReceiver<String>> {
     });
     Some(rx)
 }
-
-/// Registers the `streamtube:` link scheme for this user (Windows), so browsers and
-/// other apps can open links in Stream Tube. Re-done when the exe moves.
-pub fn register_scheme() {
-    #[cfg(windows)]
-    std::thread::spawn(|| {
-        let Ok(exe) = std::env::current_exe() else { return };
-        let exe = exe.display().to_string();
-        if crate::store::kv_get("scheme_exe").as_deref() == Some(exe.as_str()) {
-            return;
-        }
-        let key = r"HKCU\Software\Classes\streamtube";
-        let cmd = format!("\"{exe}\" \"%1\"");
-        let runs: [&[&str]; 4] = [
-            &["add", key, "/ve", "/d", "URL:Stream Tube link", "/f"],
-            &["add", key, "/v", "URL Protocol", "/d", "", "/f"],
-            &["add", &format!(r"{key}\DefaultIcon"), "/ve", "/d", &format!("\"{exe}\",0"), "/f"],
-            &["add", &format!(r"{key}\shell\open\command"), "/ve", "/d", &cmd, "/f"],
-        ];
-        let mut ok = true;
-        for args in runs {
-            let mut c = std::process::Command::new("reg");
-            c.args(args);
-            crate::api::streams::hide_window(&mut c);
-            ok &= c.output().map(|o| o.status.success()).unwrap_or(false);
-        }
-        if ok {
-            crate::store::kv_set("scheme_exe", &exe);
-        }
-    });
-}
-
-/// A browser bookmark that opens the current YouTube page in Stream Tube.
-pub const BOOKMARKLET: &str = "javascript:location.href='streamtube://open?url='+encodeURIComponent(location.href)";
 
 #[cfg(test)]
 mod tests {

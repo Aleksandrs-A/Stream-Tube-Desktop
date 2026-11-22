@@ -379,6 +379,35 @@ fn harvest_removal_tokens(r: &Value) {
     }
 }
 
+/// Brings the account's recent searches (made on the phone, TV or web) into the
+/// local search history. YouTube offers them as the suggestions for an empty
+/// query when the request is signed in; signed out the list is empty.
+pub fn sync_search_history() -> Result<usize> {
+    let token = access_token().ok_or_else(|| anyhow!("not signed in"))?;
+    let auth = format!("Bearer {token}");
+    let hl = crate::store::settings_snapshot().language.clone();
+    let url = format!("https://suggestqueries-clients6.youtube.com/complete/search?client=youtube-lr&ds=yt&xhr=t&q=&hl={}", http::urlencode(&hl));
+    let body = http::get_bytes(&url, &[("Authorization", &auth), ("User-Agent", TV_UA)])?;
+    let v: Value = serde_json::from_slice(&body)?;
+    let queries: Vec<String> = v
+        .get(1)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.get(0).or(Some(e)).and_then(Value::as_str).map(str::to_string))
+        .filter(|q| !q.trim().is_empty())
+        .collect();
+    // oldest first so the most recent remote search sorts highest among them
+    let base = chrono::Utc::now().timestamp() - 7 * 86400;
+    let mut added = 0;
+    for (i, q) in queries.iter().enumerate() {
+        if crate::store::search_history_merge_remote(q, base - i as i64 * 60) {
+            added += 1;
+        }
+    }
+    Ok(added)
+}
+
 /// Removes a video from the account's YouTube watch history.
 pub fn remove_from_history(video_id: &str) -> Result<()> {
     let token = removal_tokens().lock().get(video_id).cloned().ok_or_else(|| anyhow!("reload your history and try again"))?;

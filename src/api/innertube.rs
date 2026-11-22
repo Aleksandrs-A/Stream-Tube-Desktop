@@ -1359,3 +1359,15 @@ pub fn live_chat(token: &str) -> Result<ChatBatch> {
     }
     Ok(batch)
 }
+
+#[cfg(test)]
+mod heatmap_tests {
+    #[test]
+    #[ignore]
+    fn live_heatmap() {
+        for id in ["dQw4w9WgXcQ", "kJQP7kiw5Fk", "LXb3EKWsInQ"] {
+            let w = super::watch_next(id, None).unwrap();
+            println!("{id}: heatmap={} chapters={}", w.heatmap.len(), w.chapters.len());
+        }
+    }
+}

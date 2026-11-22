@@ -66,12 +66,25 @@ pub fn best_thumb(v: &Value) -> Option<String> {
         .or_else(|| v.get("sources"))
         .and_then(Value::as_array)?;
     let w = |t: &&Value| t.get("width").and_then(Value::as_u64).unwrap_or(0);
+    let h = |t: &&Value| t.get("height").and_then(Value::as_u64).unwrap_or(0);
+    // big enough for a card on a high-DPI screen, and no bigger: every image is
+    // kept decoded in memory (portrait Shorts covers count by height)
     let best = arr
         .iter()
-        .filter(|t| w(t) >= 600)
-        .min_by_key(w)
+        .filter(|t| w(t) >= 600 || h(t) >= 700)
+        .min_by_key(|t| w(t) * h(t).max(1))
         .or_else(|| arr.iter().max_by_key(w))?;
-    best.get("url").and_then(Value::as_str).map(fix_url)
+    best.get("url").and_then(Value::as_str).map(fix_url).map(|u| limit_avatar(&u))
+}
+
+#[cfg(test)]
+mod avatar_tests {
+    #[test]
+    fn avatar_size() {
+        assert_eq!(super::limit_avatar("https://yt3.ggpht.com/abc=s900-c-k-c0x00ffffff-no-rj"), "https://yt3.ggpht.com/abc=s240-c-k-c0x00ffffff-no-rj");
+        assert_eq!(super::limit_avatar("https://yt3.ggpht.com/abc=s88-c-k"), "https://yt3.ggpht.com/abc=s88-c-k");
+        assert_eq!(super::limit_avatar("https://i.ytimg.com/vi/x/hq720.jpg"), "https://i.ytimg.com/vi/x/hq720.jpg");
+    }
 }
 
 pub fn small_thumb(v: &Value) -> Option<String> {
@@ -83,6 +96,22 @@ pub fn small_thumb(v: &Value) -> Option<String> {
         .and_then(|t| t.get("url"))
         .and_then(Value::as_str)
         .map(fix_url)
+}
+
+/// Channel avatars come as 900x900 but are drawn at 24-160 px: ask for 240 px.
+pub fn limit_avatar(u: &str) -> String {
+    if !(u.contains("yt3.ggpht.com") || u.contains("yt3.googleusercontent.com")) {
+        return u.to_string();
+    }
+    // "...=s900-c-k-c0x00ffffff-no-rj" -> "...=s240-c-k-c0x00ffffff-no-rj"
+    if let Some(i) = u.rfind("=s") {
+        let rest = &u[i + 2..];
+        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digits > 0 && rest[..digits].parse::<u32>().map(|n| n > 240).unwrap_or(false) {
+            return format!("{}=s240{}", &u[..i], &rest[digits..]);
+        }
+    }
+    u.to_string()
 }
 
 pub fn fix_url(u: &str) -> String {

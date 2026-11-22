@@ -59,7 +59,11 @@ fn resolve(video_id: &str) -> Result<StreamInfo> {
     let mode = crate::store::settings_snapshot().stream_backend.clone();
     match mode.as_str() {
         "ytdlp" => ytdlp_streams(video_id),
-        "innertube" => visionos(video_id).or_else(|e| android_vr(video_id).map_err(|e2| anyhow!("{e}\n{e2}"))),
+        // a chosen client first, the other built-in one if it fails
+        "visionos" | "innertube" => visionos(video_id).or_else(|e| android_vr(video_id).map_err(|e2| anyhow!("{e}\n{e2}"))),
+        "android_vr" => android_vr(video_id)
+            .and_then(|i| if i.video.is_empty() && i.hls_url.is_none() { Err(anyhow!("Android VR returned no playable formats")) } else { Ok(i) })
+            .or_else(|e| visionos(video_id).map_err(|e2| anyhow!("{e}\n{e2}"))),
         _ => {
             // The visionOS client hands out an HLS manifest that needs neither a
             // PO token nor JS challenge solving: fast, and works signed out.
@@ -123,6 +127,11 @@ fn cache_put(id: &str, info: &StreamInfo) {
 }
 
 /// Removes a cached entry (e.g. after its URLs failed to play).
+/// Forgets every resolved stream (after switching the playback client).
+pub fn clear_cache() {
+    cache().lock().clear();
+}
+
 pub fn invalidate(id: &str) {
     cache().lock().remove(id);
 }
@@ -512,6 +521,9 @@ pub fn ytdlp_streams(video_id: &str) -> Result<StreamInfo> {
     let bin = ytdlp_path().ok_or_else(|| anyhow!("yt-dlp not found (install it or set its path in Settings)"))?;
     let mut cmd = Command::new(bin);
     cmd.args(["-J", "--no-warnings", "--no-playlist"]);
+    if let Some(p) = crate::store::proxy_setting() {
+        cmd.arg("--proxy").arg(p);
+    }
     if crate::store::settings_snapshot().ipv4_only {
         cmd.arg("--force-ipv4");
     }
