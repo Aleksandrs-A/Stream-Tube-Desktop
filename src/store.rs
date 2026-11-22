@@ -65,6 +65,8 @@ pub struct Settings {
     // Privacy
     pub history_enabled: bool,
     pub search_history_enabled: bool,
+    /// look for a new version on GitHub at startup
+    pub check_updates: bool,
     // Subscriptions
     pub feed_source: String,
     pub feed_include_shorts: bool,
@@ -162,6 +164,7 @@ impl Default for Settings {
             blocked_channels: Vec::new(),
             history_enabled: true,
             search_history_enabled: true,
+            check_updates: true,
             feed_source: "full".into(),
             feed_include_shorts: false,
             feed_include_live: true,

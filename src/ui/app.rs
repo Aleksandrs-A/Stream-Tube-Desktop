@@ -161,6 +161,8 @@ pub enum Dialog {
     SaveToPlaylist(VideoItem),
     TextPrompt { title: String, placeholder: String, on_submit: Arc<dyn Fn(String, &mut Window, &mut App)> },
     Confirm { title: String, body: String, confirm: String, on_confirm: Arc<dyn Fn(&mut Window, &mut App)> },
+    /// a newer version is on GitHub
+    Update,
 }
 
 /// State of the TV device-code sign-in shown in the sign-in dialog.
@@ -393,6 +395,7 @@ impl AppView {
             _ => Route::Home,
         });
         let page = build_page(&start, window, cx);
+        crate::updater::check_on_startup(cx);
         if let Route::Search(q) = &start {
             let q = q.clone();
             search.update(cx, |st, cx| st.set_value(q, window, cx));
@@ -1862,6 +1865,70 @@ impl AppView {
         )
     }
 
+    fn render_update(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::updater::Status;
+        let p = pal(cx);
+        let status = cx.default_global::<crate::updater::Updates>().status.clone();
+        let (rel, progress) = match status {
+            Status::Available(r) => (r, None),
+            Status::Downloading(r, f) => (r, Some(f)),
+            _ => {
+                return div().text_sm().text_color(p.text2).child("No update available").into_any_element();
+            }
+        };
+        let mut notes: String = rel.notes.replace("\r\n", "\n").lines().map(|l| l.trim_start_matches(['#', ' '])).collect::<Vec<_>>().join("\n");
+        if notes.chars().count() > 700 {
+            notes = notes.chars().take(700).collect::<String>() + "…";
+        }
+        let has_installer = cfg!(windows) && rel.asset.is_some();
+        let size = rel.asset.as_ref().map(|a| a.2).filter(|s| *s > 0).map(|s| format!(" · {:.0} MB", s as f64 / 1_048_576.0)).unwrap_or_default();
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().flex().items_center().gap_2().child(icon("download").text_color(p.accent)).child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Update available")))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(p.text2)
+                    .child(format!("{}{} — you have {}{}", rel.name, if rel.prerelease { " (pre-release)" } else { "" }, crate::updater::current_version(), size)),
+            );
+        if !notes.trim().is_empty() {
+            col = col.child(div().max_h(px(220.)).overflow_hidden().p_3().rounded_lg().bg(p.hover).text_sm().text_color(p.text).child(notes));
+        }
+        if let Some(f) = progress {
+            col = col
+                .child(div().w_full().h(px(6.)).rounded_full().bg(p.hover).child(div().h_full().rounded_full().w(relative(f.clamp(0.0, 1.0))).bg(p.accent)))
+                .child(div().text_xs().text_color(p.text2).child(format!("Downloading… {:.0}%", f * 100.0)));
+            return col.into_any_element();
+        }
+        col.child(
+            div()
+                .flex()
+                .justify_end()
+                .gap_2()
+                .child(pill("upd-skip", None, "Skip this version", cx).on_click(cx.listener(|this, _, _, cx| {
+                    crate::updater::skip(cx);
+                    this.dialog = None;
+                    cx.notify();
+                })))
+                .child(pill("upd-later", None, "Later", cx).on_click(cx.listener(|this, _, _, cx| {
+                    this.dialog = None;
+                    cx.notify();
+                })))
+                .child(pill("upd-go", Some("download"), if has_installer { "Update now" } else { "Download" }, cx).bg(p.accent).text_color(white()).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        if !has_installer {
+                            this.dialog = None;
+                        }
+                        crate::updater::install(cx);
+                        cx.notify();
+                    },
+                ))),
+        )
+        .into_any_element()
+    }
+
     fn render_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = pal(cx);
         let d = self.dialog.as_ref()?;
@@ -1956,6 +2023,7 @@ impl AppView {
                     ),
                 )
                 .into_any_element(),
+            Dialog::Update => self.render_update(cx),
             Dialog::Confirm { title, body, confirm, .. } => div()
                 .flex()
                 .flex_col()

@@ -105,6 +105,29 @@ pub fn start(video: VideoItem, format: Option<String>, cx: &mut App) {
         return;
     }
     let fmt = format.unwrap_or_else(|| store::settings_snapshot().download_format.clone());
+    // without yt-dlp only 360p (one combined stream) or audio can be saved
+    if fmt != "audio" && fmt != "single" && streams::ytdlp_path().is_none() {
+        if YTDLP_FETCHING.load(Ordering::SeqCst) {
+            PENDING.lock().push((video, Some(fmt)));
+            return;
+        }
+        let v2 = video.clone();
+        crate::ui::toast_with_actions(
+            cx,
+            "Higher quality downloads use yt-dlp",
+            vec![
+                (
+                    "Get yt-dlp (18 MB)".into(),
+                    Arc::new(move |_, cx: &mut App| {
+                        PENDING.lock().push((video.clone(), Some(fmt.clone())));
+                        fetch_ytdlp(cx);
+                    }),
+                ),
+                ("Download 360p".into(), Arc::new(move |_, cx: &mut App| start(v2.clone(), Some("single".into()), cx))),
+            ],
+        );
+        return;
+    }
     // separate video + audio streams need FFmpeg to be joined into one file
     if fmt != "audio" && fmt != "single" && streams::ytdlp_path().is_some() && ffmpeg_path().is_none() {
         if FFMPEG_FETCHING.load(Ordering::SeqCst) {
@@ -605,6 +628,62 @@ pub fn fetch_ffmpeg(cx: &mut App) {
                     }
                 }
                 Err(e) => toast(cx, format!("FFmpeg download failed: {e}")),
+            }
+        });
+    })
+    .detach();
+}
+
+// ── yt-dlp (the standalone build, kept in the data folder) ──
+
+static YTDLP_FETCHING: AtomicBool = AtomicBool::new(false);
+
+const YTDLP_URL: &str = if cfg!(windows) {
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+} else {
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
+};
+
+/// Downloads yt-dlp into the data folder, then starts the downloads waiting for it.
+pub fn fetch_ytdlp(cx: &mut App) {
+    if YTDLP_FETCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    toast(cx, "Downloading yt-dlp…");
+    cx.spawn(async move |cx| {
+        let res = crate::ui::blocking(|| -> anyhow::Result<()> {
+            let name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+            let dest = store::data_dir().join(name);
+            let tmp = store::data_dir().join(format!("{name}.part"));
+            {
+                let mut f = std::fs::File::create(&tmp)?;
+                crate::api::http::download_to(YTDLP_URL, &mut f, |_, _| true)?;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+            }
+            let _ = std::fs::remove_file(&dest);
+            std::fs::rename(&tmp, &dest)?;
+            streams::reset_ytdlp_cache();
+            if streams::ytdlp_path().is_none() {
+                anyhow::bail!("the downloaded yt-dlp does not run");
+            }
+            Ok(())
+        })
+        .await;
+        YTDLP_FETCHING.store(false, Ordering::SeqCst);
+        let _ = cx.update(|cx| {
+            let pending: Vec<_> = std::mem::take(&mut *PENDING.lock());
+            match res {
+                Ok(()) => {
+                    toast(cx, "yt-dlp is ready");
+                    for (v, f) in pending {
+                        start(v, f, cx);
+                    }
+                }
+                Err(e) => toast(cx, format!("yt-dlp download failed: {e}")),
             }
         });
     })

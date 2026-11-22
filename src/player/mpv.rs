@@ -89,10 +89,14 @@ fn lib() -> Result<&'static (Library, Fns)> {
                 candidates.push(d.join("mpv-2.dll"));
             }
         }
+        #[cfg(windows)]
         candidates.push(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/third_party/mpv/libmpv-2.dll")));
         candidates.push("libmpv-2.dll".into());
         candidates.push("mpv-2.dll".into());
         candidates.push("libmpv.so.2".into());
+        // older distributions (Ubuntu 22.04, Debian 11) ship the same API as .so.1
+        candidates.push("libmpv.so.1".into());
+        candidates.push("libmpv.so".into());
         candidates.push("libmpv.2.dylib".into());
         let mut last_err = String::from("libmpv not found");
         for c in candidates {

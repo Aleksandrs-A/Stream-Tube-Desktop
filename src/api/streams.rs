@@ -450,8 +450,15 @@ fn sort_formats(info: &mut StreamInfo) {
     info.audio.sort_by(|a, b| b.bitrate.cmp(&a.bitrate));
 }
 
+static YTDLP_CACHED: parking_lot::Mutex<Option<(String, Option<String>)>> = parking_lot::Mutex::new(None);
+
+/// Forget where yt-dlp was (or wasn't) found, e.g. after fetching it.
+pub fn reset_ytdlp_cache() {
+    *YTDLP_CACHED.lock() = None;
+}
+
 pub fn ytdlp_path() -> Option<String> {
-    static CACHED: parking_lot::Mutex<Option<(String, Option<String>)>> = parking_lot::Mutex::new(None);
+    static CACHED: &parking_lot::Mutex<Option<(String, Option<String>)>> = &YTDLP_CACHED;
     let custom = crate::store::settings_snapshot().ytdlp_path.clone();
     if let Some((key, found)) = CACHED.lock().clone() {
         if key == custom {
@@ -464,8 +471,23 @@ pub fn ytdlp_path() -> Option<String> {
 }
 
 fn find_ytdlp(custom: &str) -> Option<String> {
-    let custom = custom.to_string();
-    let candidates = if custom.is_empty() { vec!["yt-dlp".to_string()] } else { vec![custom, "yt-dlp".into()] };
+    let mut candidates: Vec<String> = Vec::new();
+    if !custom.is_empty() {
+        candidates.push(custom.to_string());
+    }
+    // bundled next to the app (installer) or kept in the data folder
+    let exe = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+    if let Some(d) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
+        let p = d.join(exe);
+        if p.is_file() {
+            candidates.push(p.to_string_lossy().into_owned());
+        }
+    }
+    let p = crate::store::data_dir().join(exe);
+    if p.is_file() {
+        candidates.push(p.to_string_lossy().into_owned());
+    }
+    candidates.push("yt-dlp".into());
     for c in candidates {
         let mut cmd = Command::new(&c);
         cmd.arg("--version");

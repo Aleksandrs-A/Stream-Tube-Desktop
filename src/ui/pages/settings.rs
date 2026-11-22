@@ -649,11 +649,33 @@ impl SettingsPage {
     }
 
     fn about(&self, cx: &mut Context<Self>) -> Div {
+        let s = store::settings_snapshot();
         let mpv = crate::player::mpv::available();
         card(cx)
             .child(row("Stream Tube", &format!("Version {}", env!("CARGO_PKG_VERSION")), div(), cx))
-            .child(row("Video engine", if mpv { "libmpv" } else { "libmpv-2.dll not found" }, div(), cx))
+            .child(row("Video engine", if mpv { "libmpv" } else if cfg!(windows) { "libmpv-2.dll not found" } else { "libmpv not found (install the libmpv package)" }, div(), cx))
             .child(row("yt-dlp", self.ytdlp_version.as_deref().unwrap_or("not installed"), div(), cx))
+            .child({
+                use crate::updater::Status;
+                let status = cx.default_global::<crate::updater::Updates>().status.clone();
+                let text = match &status {
+                    Status::Idle => "Pre-releases included".to_string(),
+                    Status::Checking => "Checking…".to_string(),
+                    Status::UpToDate => "You have the latest version".to_string(),
+                    Status::Available(r) => format!("{} is available", r.name),
+                    Status::Downloading(_, f) => format!("Downloading… {:.0}%", f * 100.0),
+                    Status::Error(e) => format!("Could not check: {e}"),
+                };
+                let btn = match &status {
+                    Status::Available(_) => pill("upd-show", Some("download"), "Update", cx).on_click(|_, window, cx| crate::ui::app::open_dialog(crate::ui::app::Dialog::Update, window, cx)),
+                    _ => pill("upd-check", Some("refresh-cw"), "Check for updates", cx).on_click(|_, _, cx| crate::updater::check_now(true, cx)),
+                };
+                row("Updates", &text, btn, cx)
+            })
+            .child(row("Check for updates at startup", "", switch("upd-auto", s.check_updates, |s, v| s.check_updates = v, cx), cx))
+            .child(row("Releases", "Changelog and downloads on GitHub", pill("upd-page", Some("external-link"), "Open", cx).on_click(|_, _, _| {
+                let _ = open::that(crate::updater::RELEASES_PAGE);
+            }), cx))
 
     }
 }
