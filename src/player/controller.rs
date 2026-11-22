@@ -663,7 +663,10 @@ impl Player {
         }
         mpv.set("vid", if self.audio_only { "no" } else { "auto" });
         self.loading = true;
-        if let Err(e) = mpv.command(&["loadfile", &src, "replace", "-1", &opts.join(",")]) {
+        // mpv 0.38 added an index argument; older libmpv (Ubuntu 22.04's 0.34) takes options third
+        let joined = opts.join(",");
+        let res = mpv.command(&["loadfile", &src, "replace", "-1", &joined]).or_else(|_| mpv.command(&["loadfile", &src, "replace", &joined]));
+        if let Err(e) = res {
             self.error = Some(e.to_string());
         }
         cx.notify();

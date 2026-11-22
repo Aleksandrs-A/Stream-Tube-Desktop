@@ -5,12 +5,13 @@
 <h1 align="center">Stream Tube</h1>
 
 <p align="center">
-  A native YouTube client for Windows, written in Rust.<br>
+  A native YouTube client for Windows and Linux, written in Rust.<br>
   No browser, no ads, no tracking. SponsorBlock, DeArrow and Return YouTube Dislike built in.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Windows">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D6" alt="Windows and Linux">
+  <img src="https://img.shields.io/github/v/release/Avaneesh-Inamdar/Stream-Tube-Desktop?include_prereleases&label=release" alt="Latest release">
   <img src="https://img.shields.io/badge/built%20with-Rust-B7410E" alt="Rust">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
 </p>
@@ -80,6 +81,28 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
   </tr>
 </table>
 
+## Install
+
+Get the latest build from the [Releases page](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/releases).
+This is an early alpha, so expect rough edges.
+
+**Windows 10/11 (64-bit)**: run `StreamTube-<version>-setup.exe`. It installs for
+your user only, so no administrator prompt, and the app updates itself when a new
+release comes out (*Settings → About*).
+
+**Linux (x86_64)**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
+`./install.sh`. It puts the app in `~/.local/bin` and adds a menu entry.
+Video plays through libmpv, so install it if you don't have it:
+
+```sh
+sudo apt install libmpv2      # Debian 12+, Ubuntu 24.04+ (Ubuntu 22.04: libmpv1)
+sudo dnf install mpv-libs     # Fedora
+sudo pacman -S mpv            # Arch
+```
+
+Downloads above 360p need yt-dlp and FFmpeg. On Windows the app offers to fetch
+both the first time you need them. On Linux, install them with your package manager.
+
 ## Building
 
 You need:
@@ -103,9 +126,20 @@ cargo build --release
 The executable ends up at `target\release\streamtube.exe`. To run it somewhere
 else, copy `libmpv-2.dll` next to it.
 
+To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
+
+```powershell
+ISCC.exe /DAppVersion=0.1.0-alpha installer\streamtube.iss
+```
+
+It lands in `dist\`. On Linux, install the packages listed in
+[`.github/workflows/linux.yml`](.github/workflows/linux.yml) and run `cargo build --release`.
+
 ## Where things are stored
 
-Settings, history and subscriptions go in `%APPDATA%\StreamTube\streamtube.db`.
+Settings, history and subscriptions go in `%APPDATA%\StreamTube\streamtube.db` on
+Windows and `~/.local/share/StreamTube/streamtube.db` on Linux. Set `STREAMTUBE_DATA_DIR`
+to keep them somewhere else (for example a portable copy).
 If you used the app back when it was called Ferrotube, your old data is moved
 over automatically on first launch.
 
@@ -125,8 +159,7 @@ src/
 
 - YouTube sometimes answers with "Sign in to confirm you're not a bot". When that
   happens, signing in inside the app or updating yt-dlp usually fixes it.
-- Windows is the only platform tested so far. The code isn't Windows-specific in
-  most places, so Linux and macOS builds may work with a bit of effort.
+- Windows is the main platform. The Linux build is new and less tested; macOS isn't built yet.
 
 ## Credits
 
