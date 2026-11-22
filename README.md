@@ -10,7 +10,6 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0--alpha-F0307E" alt="Version 0.2.0-alpha">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D6" alt="Windows and Linux">
   <img src="https://img.shields.io/github/v/release/Avaneesh-Inamdar/Stream-Tube-Desktop?include_prereleases&label=release" alt="Latest release">
   <img src="https://img.shields.io/badge/built%20with-Rust-B7410E" alt="Rust">
