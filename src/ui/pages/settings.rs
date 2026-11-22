@@ -8,6 +8,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 enum Section {
     General,
     Player,
+    Premium,
+    Tweaks,
     SponsorBlock,
     Content,
     Subscriptions,
@@ -21,6 +23,8 @@ enum Section {
 const SECTIONS: &[(Section, &str, &str)] = &[
     (Section::General, "General", "palette"),
     (Section::Player, "Player", "circle-play"),
+    (Section::Premium, "Premium features", "sparkles"),
+    (Section::Tweaks, "Tweaks", "sliders-horizontal"),
     (Section::SponsorBlock, "SponsorBlock & DeArrow", "shield-check"),
     (Section::Content, "Content filters", "funnel"),
     (Section::Subscriptions, "Subscriptions", "tv"),
@@ -37,6 +41,11 @@ pub struct SettingsPage {
     inputs: Vec<(&'static str, Entity<InputState>)>,
     keyword: Entity<InputState>,
     ytdlp_version: Option<String>,
+    /// open dropdown (by id) and when the last one closed (an outside click closes it
+    /// right before the button's own click would reopen it)
+    open_dd: Option<&'static str>,
+    dd_closed_at: std::time::Instant,
+    search: Entity<InputState>,
     _subs: Vec<Subscription>,
 }
 
@@ -90,7 +99,23 @@ impl SettingsPage {
                 }
             }
         }));
-        let mut page = Self { section: Section::General, scroll: ScrollHandle::new(), inputs, keyword, ytdlp_version: None, _subs: subs };
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings"));
+        subs.push(cx.subscribe_in(&search, window, |_, _, ev: &InputEvent, _, cx| {
+            if matches!(ev, InputEvent::Change) {
+                cx.notify();
+            }
+        }));
+        let mut page = Self {
+            section: Section::General,
+            scroll: ScrollHandle::new(),
+            inputs,
+            keyword,
+            ytdlp_version: None,
+            open_dd: None,
+            dd_closed_at: std::time::Instant::now() - std::time::Duration::from_secs(5),
+            search,
+            _subs: subs,
+        };
         cx.spawn(async move |this, cx| {
             let v = blocking(|| {
                 crate::api::streams::ytdlp_path().and_then(|p| {
@@ -120,7 +145,7 @@ impl SettingsPage {
 fn after_change(_id: &str, window: &mut Window, cx: &mut App) {
     apply_theme(Some(window), cx);
     crate::player::controller::apply_settings(cx);
-    cx.refresh_windows();
+    crate::ui::app::refresh_all_pages(cx);
 }
 
 fn card(cx: &App) -> Div {
@@ -128,8 +153,20 @@ fn card(cx: &App) -> Div {
     div().flex().flex_col().rounded_xl().bg(p.surface).px_5().py_2()
 }
 
+thread_local! {
+    /// Lower-case settings search text while rendering (rows that don't match hide).
+    static QUERY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
 fn row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
     let p = pal(cx);
+    let hidden = QUERY.with(|q| {
+        let q = q.borrow();
+        !q.is_empty() && !title.to_lowercase().contains(q.as_str()) && !desc.to_lowercase().contains(q.as_str())
+    });
+    if hidden {
+        return div();
+    }
     div()
         .flex()
         .items_center()
@@ -187,6 +224,113 @@ fn text_field(st: &Entity<InputState>, w: f32, cx: &App) -> impl IntoElement {
 }
 
 impl SettingsPage {
+    /// A dropdown listing `list` (code, name); picks are written with `set`.
+    fn dropdown(&self, id: &'static str, list: &'static [(&'static str, &'static str)], cur: String, set: fn(&mut Settings, String), cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let open = self.open_dd == Some(id);
+        let label = format!("{}  ·  {}", crate::locale::name(list, &cur), cur);
+        let mut el = div().relative().w(px(280.)).child(
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .px_3()
+                .h_9()
+                .rounded_lg()
+                .border_1()
+                .border_color(if open { p.link } else { p.border })
+                .bg(p.bg)
+                .cursor_pointer()
+                .hover(move |s| s.bg(p.hover))
+                .child(div().flex_1().min_w_0().truncate().text_sm().text_color(p.text).child(label))
+                .child(icon(if open { "chevron-up" } else { "chevron-down" }).size_4().text_color(p.text2))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let just_closed = this.dd_closed_at.elapsed() < std::time::Duration::from_millis(300);
+                    this.open_dd = if this.open_dd == Some(id) || just_closed { None } else { Some(id) };
+                    cx.notify();
+                })),
+        );
+        if open {
+            let mut items = div()
+                .id(SharedString::from(format!("{id}-list")))
+                .occlude()
+                .flex()
+                .flex_col()
+                .max_h(px(340.))
+                .overflow_y_scroll()
+                .py_1()
+                .rounded_lg()
+                .bg(p.surface2)
+                .border_1()
+                .border_color(p.border)
+                .shadow_lg()
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.open_dd = None;
+                    this.dd_closed_at = std::time::Instant::now();
+                    cx.notify();
+                }));
+            for (code, name) in list {
+                let active = code.eq_ignore_ascii_case(&cur);
+                let code2 = code.to_string();
+                items = items.child(
+                    div()
+                        .id(SharedString::from(format!("{id}-{code}")))
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_3()
+                        .py_1p5()
+                        .cursor_pointer()
+                        .text_sm()
+                        .text_color(p.text)
+                        .when(active, |d| d.bg(p.hover).font_weight(FontWeight::MEDIUM))
+                        .hover(move |s| s.bg(p.hover))
+                        .child(div().w_4().child(if active { icon("check").size_4().text_color(p.link).into_any_element() } else { div().into_any_element() }))
+                        .child(div().flex_1().child(name.to_string()))
+                        .child(div().text_xs().text_color(p.text2).child(code.to_string()))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let v = code2.clone();
+                            store::update_settings(|s| set(s, v));
+                            this.open_dd = None;
+                            after_change(id, window, cx);
+                            cx.notify();
+                        })),
+                );
+            }
+            el = el.child(deferred(div().absolute().top(px(40.)).left_0().w_full().child(items)).with_priority(5));
+        }
+        el.into_any_element()
+    }
+
+    fn premium(&self, cx: &mut Context<Self>) -> Div {
+        let s = store::settings_snapshot();
+        card(cx)
+            .child(row("Background play", "Keep playing when the window is minimized (off: pause, resume on restore)", switch("bgp", s.background_play, |s, v| s.background_play = v, cx), cx))
+            .child(row("Most replayed graph", "Heat line above the seek bar", switch("heat", s.show_heatmap, |s, v| s.show_heatmap = v, cx), cx))
+            .child(row("Jump ahead", "Button to skip to the most replayed part", switch("jump", s.jump_ahead, |s, v| s.jump_ahead = v, cx), cx))
+            .child(row("Enhanced bitrate", "Prefer the highest-bitrate variant of a quality", switch("ebr", s.enhanced_bitrate, |s, v| s.enhanced_bitrate = v, cx), cx))
+            .child(row("Ambient mode", "Soft glow of the video's colors around the player", switch("amb", s.ambient_mode, |s, v| s.ambient_mode = v, cx), cx))
+            .child(row("Force original audio", "Play the original language instead of auto-dubbed tracks", switch("orig", s.original_audio, |s, v| s.original_audio = v, cx), cx))
+    }
+
+    fn tweaks(&self, cx: &mut Context<Self>) -> Div {
+        let s = store::settings_snapshot();
+        card(cx)
+            .child(row("Shorts: play next automatically", "Move to the next Short when one ends", switch("sha", s.shorts_autoadvance, |s, v| s.shorts_autoadvance = v, cx), cx))
+            .child(row("Open Shorts in the regular player", "", switch("shp", s.shorts_in_player, |s, v| s.shorts_in_player = v, cx), cx))
+            .child(row("Remember last quality", "Use the quality you picked last as the default", switch("rq", s.remember_quality, |s, v| s.remember_quality = v, cx), cx))
+            .child(row("Double-click for fullscreen", "", switch("dcf", s.double_click_fullscreen, |s, v| s.double_click_fullscreen = v, cx), cx))
+            .child(row("Exit fullscreen when a video ends", "", switch("efe", s.exit_fullscreen_at_end, |s, v| s.exit_fullscreen_at_end = v, cx), cx))
+            .child(row(
+                "Controls shade",
+                "Gradient behind the player controls",
+                choice("shade", &[("light".to_string(), "Light"), ("default".to_string(), "Default"), ("strong".to_string(), "Strong")], s.controls_shade.clone(), |s, v| s.controls_shade = v, cx),
+                cx,
+            ))
+    }
+
     fn general(&self, cx: &mut Context<Self>) -> Div {
         let s = store::settings_snapshot();
         let account = crate::api::auth::account().filter(|_| crate::api::auth::signed_in());
@@ -216,8 +360,8 @@ impl SettingsPage {
             .child(row("Density", "", choice("density", &[("compact".to_string(), "Compact"), ("default".to_string(), "Default"), ("comfortable".to_string(), "Comfortable")], s.density.clone(), |s, v| s.density = v, cx), cx))
             .child(row("Thumbnail corners", "", choice("radius", &[(0.0f32, "Square"), (6.0, "Small"), (12.0, "Rounded"), (18.0, "Large")], s.thumb_radius, |s, v| s.thumb_radius = v, cx), cx))
             .child(row("Grid columns", "", choice("cols", &[(0u32, "Auto"), (3, "3"), (4, "4"), (5, "5"), (6, "6")], s.grid_columns, |s, v| s.grid_columns = v, cx), cx))
-            .child(row("Region", "e.g. US, IN", text_field(&self.input("region"), 120., cx), cx))
-            .child(row("Language", "e.g. en, hi", text_field(&self.input("language"), 120., cx), cx))
+            .child(row("Region", "Trending, Explore and search results", self.dropdown("dd-region", crate::locale::REGIONS, s.region.clone(), |s, v| s.region = v, cx), cx))
+            .child(row("Language", "Titles, dates and YouTube's text", self.dropdown("dd-lang", crate::locale::LANGUAGES, s.language.clone(), |s, v| s.language = v, cx), cx))
     }
 
     fn player(&self, cx: &mut Context<Self>) -> Div {
@@ -238,7 +382,7 @@ impl SettingsPage {
             .child(row("Audio only mode", "", switch("ao", s.audio_only, |s, v| s.audio_only = v, cx), cx))
             .child(row("Hardware decoding", "Takes effect after restart", switch("hw", s.hwdec, |s, v| s.hwdec = v, cx), cx))
             .child(row("Captions on by default", "", switch("cc", s.captions_enabled, |s, v| s.captions_enabled = v, cx), cx))
-            .child(row("Caption language", "", text_field(&self.input("captions_lang"), 120., cx), cx))
+            .child(row("Caption language", "Preferred subtitle track", self.dropdown("dd-cap", crate::locale::LANGUAGES, s.captions_lang.clone(), |s, v| s.captions_lang = v, cx), cx))
             .child(row("Caption size", "", choice("capsize", &[(30u32, "Small"), (40, "Medium"), (52, "Large"), (64, "Extra large")], s.caption_size, |s, v| s.caption_size = v, cx), cx))
             .child(row("Caption background", "", switch("capbg", s.caption_background, |s, v| s.caption_background = v, cx), cx))
             .child(row("Hide controls after", "", choice("hide", &[(1500u64, "1.5s"), (2500, "2.5s"), (4000, "4s"), (8000, "8s")], s.controls_hide_ms, |s, v| s.controls_hide_ms = v, cx), cx))
@@ -255,7 +399,28 @@ impl SettingsPage {
             .child(row("Enable SponsorBlock", "", switch("sb", s.sponsorblock, |s, v| s.sponsorblock = v, cx), cx))
             .child(row("Show skip notifications", "With an “Unskip” button", switch("sbn", s.sb_notify, |s, v| s.sb_notify = v, cx), cx))
             .child(row("Minimum segment duration (seconds)", "", text_field(&self.input("sb_min"), 100., cx), cx))
-            .child(row("Server", "", text_field(&self.input("sb_server"), 320., cx), cx));
+            .child(row("Server", "", text_field(&self.input("sb_server"), 320., cx), cx))
+            .child(row(
+                "Private user ID",
+                if s.sb_user_id.is_empty() { "Needed to vote on segments. Keep it secret." } else { "Used to vote on segments. Keep it secret." },
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .when(!s.sb_user_id.is_empty(), |d| {
+                        let id = s.sb_user_id.clone();
+                        let masked = format!("{}••••••••", id.chars().take(4).collect::<String>());
+                        d.child(div().text_sm().text_color(p.text2).child(masked))
+                            .child(pill("sbid-copy", Some("copy"), "Copy", cx).on_click(move |_, _, cx| copy_to_clipboard(id.clone(), cx)))
+                    })
+                    .child(pill("sbid-gen", Some("key-round"), if s.sb_user_id.is_empty() { "Generate" } else { "New ID" }, cx).on_click(|_, window, cx| {
+                        let id = crate::api::services::new_sb_user_id();
+                        store::update_settings(|s| s.sb_user_id = id);
+                        toast(cx, "New SponsorBlock ID created");
+                        after_change("sbid", window, cx);
+                    })),
+                cx,
+            ));
         for (cat, name, color) in SB_CATEGORIES {
             let cur = s.sb_actions.get(*cat).cloned().unwrap_or_else(|| "off".into());
             let mut opts = div().flex().gap_2();
@@ -409,6 +574,7 @@ impl SettingsPage {
                 text_field(&self.input("ytdlp"), 320., cx),
                 cx,
             ))
+            .child(row("Use IPv4 only", "Avoids YouTube's “confirm you're not a bot” check on flagged IPv6 networks", switch("ipv4", s.ipv4_only, |s, v| s.ipv4_only = v, cx), cx))
             .child(row("Proxy", "Restart required", text_field(&self.input("proxy"), 320., cx), cx))
             .child(row("Update yt-dlp", "", pill("ytu", Some("refresh-cw"), "Update", cx).on_click(|_, _, cx| {
                 cx.spawn(async move |cx| {
@@ -523,7 +689,23 @@ fn export_button(id: &'static str, name: &'static str, kind: ExportKind, cx: &Ap
 impl Render for SettingsPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = pal(cx);
-        let mut nav = div().flex().flex_col().gap_1().w(px(240.)).flex_none();
+        let query = self.search.read(cx).value().trim().to_lowercase();
+        QUERY.with(|q| *q.borrow_mut() = query.clone());
+        let mut nav = div().flex().flex_col().gap_1().w(px(240.)).flex_none().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .mb_3()
+                .px_3()
+                .h_9()
+                .rounded_full()
+                .border_1()
+                .border_color(p.border)
+                .bg(p.bg)
+                .child(icon("search").size_4().text_color(p.text2))
+                .child(div().flex_1().child(Input::new(&self.search).appearance(false).cleanable(true))),
+        );
         for (sec, name, ic) in SECTIONS {
             let active = *sec == self.section;
             let sec = *sec;
@@ -549,9 +731,38 @@ impl Render for SettingsPage {
                     })),
             );
         }
+        let render_section = |this: &Self, sec: Section, cx: &mut Context<Self>| match sec {
+            Section::General => this.general(cx),
+            Section::Player => this.player(cx),
+            Section::Premium => this.premium(cx),
+            Section::Tweaks => this.tweaks(cx),
+            Section::SponsorBlock => this.sponsorblock(cx),
+            Section::Content => this.content(cx),
+            Section::Subscriptions => this.subscriptions(cx),
+            Section::Privacy => this.privacy(cx),
+            Section::Network => this.network(cx),
+            Section::Downloads => this.downloads(cx),
+            Section::Data => this.data(cx),
+            Section::About => this.about(cx),
+        };
+        if !query.is_empty() {
+            // search: matching rows from every section
+            let mut all = div().flex().flex_col().gap_4();
+            for (sec, name, _) in SECTIONS {
+                all = all.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text2).child(name.to_uppercase())).child(render_section(self, *sec, cx));
+            }
+            QUERY.with(|q| q.borrow_mut().clear());
+            return page_scroll("settings-scroll", &self.scroll).child(
+                div().flex().justify_center().gap_8().px_6().pt_6().pb_24().child(nav).child(
+                    div().flex().flex_col().gap_4().w(px(860.)).child(section_title(&format!("Results for “{query}”"), cx).text_2xl()).child(all),
+                ),
+            );
+        }
         let content = match self.section {
             Section::General => self.general(cx),
             Section::Player => self.player(cx),
+            Section::Premium => self.premium(cx),
+            Section::Tweaks => self.tweaks(cx),
             Section::SponsorBlock => self.sponsorblock(cx),
             Section::Content => self.content(cx),
             Section::Subscriptions => self.subscriptions(cx),

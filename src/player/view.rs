@@ -33,8 +33,13 @@ pub struct PlayerView {
     vol_bounds: Rc<Cell<Bounds<Pixels>>>,
     hover_frac: Option<f32>,
     drag_seek: Option<f32>,
+    /// A press near the seek bar started a seek; the click layer ignores it.
+    zone_seek: Option<Instant>,
     drag_vol: bool,
     last_click: Option<Instant>,
+    /// left button held on the video; after a moment it plays at 2x
+    press: Option<Instant>,
+    press_boosted: bool,
     _sub: Subscription,
 }
 
@@ -53,8 +58,11 @@ impl PlayerView {
             vol_bounds: Rc::new(Cell::new(Bounds::default())),
             hover_frac: None,
             drag_seek: None,
+            zone_seek: None,
             drag_vol: false,
             last_click: None,
+            press: None,
+            press_boosted: false,
             _sub: sub,
         }
     }
@@ -188,6 +196,12 @@ impl Render for PlayerView {
                 cx.notify();
             }))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                // the button was let go somewhere we didn't see
+                if this.press_boosted && ev.pressed_button != Some(MouseButton::Left) {
+                    this.press_boosted = false;
+                    this.press = None;
+                    this.player.update(cx, |p, _| p.end_boost());
+                }
                 if let Some(_) = this.drag_seek {
                     let f = Self::frac_in(this.seek_bounds.get(), ev.position.x);
                     this.drag_seek = Some(f);
@@ -206,6 +220,21 @@ impl Render for PlayerView {
                 }
                 this.poke(cx);
             }))
+            // a press anywhere the seek preview shows (just above/below the
+            // thin bar) seeks there, the same as pressing the bar itself
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                    if this.mini || this.drag_seek.is_some() || this.hover_frac.is_none() {
+                        return;
+                    }
+                    let f = Self::frac_in(this.seek_bounds.get(), ev.position.x);
+                    this.drag_seek = Some(f);
+                    this.hover_frac = Some(f);
+                    this.zone_seek = Some(Instant::now());
+                    cx.notify();
+                }),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, cx| {
@@ -240,7 +269,56 @@ impl Render for PlayerView {
                 .id("click-layer")
                 .absolute()
                 .inset_0()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        if this.mini {
+                            return;
+                        }
+                        let at = Instant::now();
+                        this.press = Some(at);
+                        this.press_boosted = false;
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(Duration::from_millis(450)).await;
+                            let _ = this.update(cx, |this, cx| {
+                                if this.press == Some(at) && this.drag_seek.is_none() {
+                                    this.press_boosted = true;
+                                    this.player.update(cx, |p, _| p.start_boost());
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .detach();
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                        this.press = None;
+                        if this.press_boosted {
+                            this.player.update(cx, |p, _| p.end_boost());
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                        this.press = None;
+                        if std::mem::take(&mut this.press_boosted) {
+                            this.player.update(cx, |p, _| p.end_boost());
+                            cx.notify();
+                        }
+                    }),
+                )
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    // the release that ends a press-and-hold isn't a click
+                    if std::mem::take(&mut this.press_boosted) {
+                        return;
+                    }
+                    if this.zone_seek.take().map(|t| t.elapsed() < Duration::from_millis(800)).unwrap_or(false) {
+                        return;
+                    }
                     if this.menu.is_some() || this.menu_closed_at.elapsed() < std::time::Duration::from_millis(400) {
                         this.menu = None;
                         cx.notify();
@@ -263,6 +341,26 @@ impl Render for PlayerView {
                     this.poke(cx);
                 })),
         );
+
+        if self.player.read(cx).boost.is_some() {
+            root = root.child(
+                div().absolute().top_4().left_0().right_0().flex().justify_center().child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_3()
+                        .py_1()
+                        .rounded_full()
+                        .bg(hsla(0., 0., 0., 0.6))
+                        .text_color(white())
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("2x")
+                        .child(crate::ui::icon("fast-forward").size_4().text_color(white())),
+                ),
+            );
+        }
 
         // loading / error overlays
         if let Some(e) = error {
@@ -534,6 +632,9 @@ impl PlayerView {
         let seek_b = self.seek_bounds.clone();
         let vol_b = self.vol_bounds.clone();
         let _ = window;
+        // Narrow frames (the Shorts player) only get the essential buttons.
+        let bar_w = f32::from(self.seek_bounds.get().size.width);
+        let narrow = bar_w > 0.0 && bar_w < 560.0;
 
         // seek bar: one segment per chapter (2px gaps), hovered chapter grows
         let active = hover.is_some() || self.drag_seek.is_some();
@@ -731,7 +832,7 @@ impl PlayerView {
                         let pp = pp.clone();
                         move |_, _, cx| pp.update(cx, |p, cx| { p.toggle_mute(); cx.notify() })
                     }))
-                    .child(
+                    .when(!narrow, |d| d.child(
                         div()
                             .id("vol-slider")
                             .relative()
@@ -754,10 +855,10 @@ impl PlayerView {
                                     cx.notify();
                                 }),
                             ),
-                    ),
+                    )),
             )
-            .child(div().ml_2().text_sm().text_color(white()).child(time_text))
-            .when_some(chapter_title.filter(|_| !store::settings_snapshot().hide_chapters), |d, c| {
+            .child(div().ml_2().text_sm().whitespace_nowrap().text_color(white()).child(time_text))
+            .when_some(chapter_title.filter(|_| !narrow && !store::settings_snapshot().hide_chapters), |d, c| {
                 d.child(
                     div()
                         .flex()
@@ -776,7 +877,7 @@ impl PlayerView {
             .flex()
             .items_center()
             .gap_1()
-            .when_some(jump_to, |d, t| {
+            .when_some(jump_to.filter(|_| !narrow), |d, t| {
                 d.child(
                     div()
                         .id("c-jump")
@@ -819,15 +920,15 @@ impl PlayerView {
                 this.menu = if this.menu.is_some() || just_closed { None } else { Some(Menu::Main) };
                 cx.notify();
             })))
-            .when(!self.pip, |d| {
+            .when(!self.pip && !narrow, |d| {
                 d.child(ctl_btn("c-mini", "picture-in-picture-2").on_click(|_, window, cx| {
                     crate::ui::app::go_back_keep_playing(window, cx);
                 }))
             })
-            .when(!self.pip, |d| {
+            .when(!self.pip && !narrow, |d| {
                 d.child(ctl_btn("c-pip", "picture-in-picture").on_click(|_, _, cx| crate::ui::pip::open(cx)))
             })
-            .when(!ui.fullscreen && !self.pip, |d| {
+            .when(!ui.fullscreen && !self.pip && !narrow, |d| {
                 d.child(ctl_btn("c-theater", if ui.theater { "rectangle-horizontal" } else { "rectangle-horizontal" }).on_click(|_, _, cx| {
                     cx.global_mut::<UiState>().theater ^= true;
                     cx.refresh_windows();

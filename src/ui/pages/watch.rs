@@ -8,7 +8,25 @@ use crate::ui::app::{AutoplayNext, MenuItem, Route, UiState, navigate, open_menu
 use crate::ui::cards::*;
 use crate::ui::widgets::*;
 use crate::ui::*;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use std::collections::HashMap;
+
+/// Live chat of a running stream, polled while the page is open.
+struct LiveChat {
+    messages: Vec<ChatMessage>,
+    error: Option<String>,
+    /// "Top chat" (YouTube's filtered view) or every message
+    top: bool,
+    hidden: bool,
+    /// bumped to stop the running poll loop when switching views
+    generation: u64,
+    sending: bool,
+    input: Entity<InputState>,
+    scroll: ScrollHandle,
+    _input_sub: Subscription,
+}
+
+const CHAT_KEEP: usize = 250;
 
 pub struct WatchPage {
     id: String,
@@ -19,15 +37,18 @@ pub struct WatchPage {
     comments: Option<Load<CommentPage>>,
     comments_more_loading: bool,
     comment_sort_new: bool,
+    /// "Timed" view: comments that mention a timestamp, in video order
+    comment_timed: bool,
     replies: HashMap<String, Load<(Vec<Comment>, Option<String>)>>,
     related_more_loading: bool,
     scroll: ScrollHandle,
     local_playlist: Option<(i64, String, Vec<VideoItem>)>,
+    chat: Option<LiveChat>,
     _sub: Subscription,
 }
 
 impl WatchPage {
-    pub fn new(id: String, playlist_id: Option<String>, start: Option<f64>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(id: String, playlist_id: Option<String>, start: Option<f64>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let pl = player(cx);
         let sub = cx.subscribe(&pl, |this: &mut Self, _, ev: &PlayerEvent, cx| {
             match ev {
@@ -71,14 +92,251 @@ impl WatchPage {
             comments: None,
             comments_more_loading: false,
             comment_sort_new: false,
+            comment_timed: false,
             replies: HashMap::new(),
             related_more_loading: false,
             scroll: ScrollHandle::new(),
             local_playlist,
+            chat: None,
             _sub: sub,
         };
+        s.make_chat(window, cx);
         s.load(cx);
         s
+    }
+
+    fn make_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let signed_in = crate::api::auth::signed_in();
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(if signed_in { "Chat…" } else { "Sign in to chat" }));
+        let sub = cx.subscribe_in(&input, window, |this: &mut Self, st, ev: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = ev {
+                let text = st.read(cx).value().to_string();
+                this.send_chat(text, window, cx);
+            }
+        });
+        self.chat = Some(LiveChat {
+            messages: Vec::new(),
+            error: None,
+            top: true,
+            hidden: false,
+            generation: 0,
+            sending: false,
+            input,
+            scroll: ScrollHandle::new(),
+            _input_sub: sub,
+        });
+    }
+
+    /// Starts (or restarts, after a view switch) polling the live chat.
+    fn start_chat(&mut self, cx: &mut Context<Self>) {
+        let Some((top_tok, all_tok)) = self.info.ready().and_then(|w| w.live_chat.clone()) else { return };
+        let Some(chat) = &mut self.chat else { return };
+        chat.generation += 1;
+        chat.messages.clear();
+        chat.error = None;
+        let generation = chat.generation;
+        let mut token = if chat.top { top_tok } else { all_tok };
+        cx.spawn(async move |this, cx| {
+            loop {
+                let t = token.clone();
+                let res = blocking(move || innertube::live_chat(&t)).await;
+                let mut wait = 5000;
+                let keep_going = this
+                    .update(cx, |this, cx| {
+                        let Some(chat) = &mut this.chat else { return false };
+                        if chat.generation != generation {
+                            return false;
+                        }
+                        let at_bottom = {
+                            let off: f32 = (-chat.scroll.offset().y).into();
+                            let max: f32 = chat.scroll.max_offset().y.into();
+                            max <= 0.0 || off >= max - 40.0
+                        };
+                        let go = match res {
+                            Ok(b) => {
+                                chat.error = None;
+                                let seen: std::collections::HashSet<String> = chat.messages.iter().rev().take(300).map(|m| m.id.clone()).collect();
+                                chat.messages.extend(b.messages.into_iter().filter(|m| m.id.is_empty() || !seen.contains(&m.id)));
+                                if chat.messages.len() > CHAT_KEEP {
+                                    let cut = chat.messages.len() - CHAT_KEEP;
+                                    chat.messages.drain(..cut);
+                                }
+                                wait = b.timeout_ms.clamp(1000, 10000);
+                                match b.next {
+                                    Some(n) => {
+                                        token = n;
+                                        true
+                                    }
+                                    None => {
+                                        chat.error = Some("Chat has ended".into());
+                                        false
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = e;
+                                chat.error = Some("Could not load chat, retrying…".into());
+                                wait = 10000;
+                                true
+                            }
+                        };
+                        if at_bottom {
+                            chat.scroll.scroll_to_bottom();
+                        }
+                        cx.notify();
+                        go
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+                cx.background_executor().timer(std::time::Duration::from_millis(wait)).await;
+            }
+        })
+        .detach();
+    }
+
+    fn send_chat(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        if !crate::api::auth::signed_in() {
+            toast(cx, "Sign in to chat");
+            return;
+        }
+        let Some(w) = self.info.ready() else { return };
+        let (channel, video) = (w.channel.id.clone(), w.id.clone());
+        let Some(chat) = &mut self.chat else { return };
+        if chat.sending {
+            return;
+        }
+        chat.sending = true;
+        chat.input.update(cx, |st, cx| st.set_value("", window, cx));
+        cx.spawn(async move |this, cx| {
+            let t = text.clone();
+            let res = blocking(move || crate::api::auth::send_live_chat(&channel, &video, &t)).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(chat) = &mut this.chat {
+                    chat.sending = false;
+                }
+                if let Err(e) = res {
+                    toast(cx, format!("Message not sent: {e}"));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_chat(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let live = self.info.ready().map(|w| w.live_chat.is_some()).unwrap_or(false);
+        let p = pal(cx);
+        let chat = self.chat.as_ref()?;
+        if !live {
+            return None;
+        }
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(p.border)
+            .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Live chat"))
+            .child(chip("chat-top", "Top", chat.top, cx).on_click(cx.listener(|this, _, _, cx| {
+                if let Some(c) = &mut this.chat {
+                    if !c.top {
+                        c.top = true;
+                        this.start_chat(cx);
+                    }
+                }
+            })))
+            .child(chip("chat-all", "All", !chat.top, cx).on_click(cx.listener(|this, _, _, cx| {
+                if let Some(c) = &mut this.chat {
+                    if c.top {
+                        c.top = false;
+                        this.start_chat(cx);
+                    }
+                }
+            })))
+            .child(
+                icon_button("chat-hide", if chat.hidden { "chevron-down" } else { "chevron-up" }, cx)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(c) = &mut this.chat {
+                            c.hidden ^= true;
+                        }
+                        cx.notify();
+                    })),
+            );
+        let mut panel = div().flex().flex_col().mb_4().rounded_xl().border_1().border_color(p.border).overflow_hidden().child(header);
+        if chat.hidden {
+            return Some(panel.into_any_element());
+        }
+        let mut list = div().id("chat-list").h(px(440.)).overflow_y_scroll().track_scroll(&chat.scroll).flex().flex_col().gap_1().px_3().py_2();
+        if chat.messages.is_empty() {
+            list = list.child(div().py_6().flex().justify_center().text_sm().text_color(p.text2).child(chat.error.clone().unwrap_or_else(|| "Loading chat…".into())));
+        }
+        for m in &chat.messages {
+            let name_color = match m.role {
+                ChatRole::Owner => rgb(0xffd600).into(),
+                ChatRole::Moderator => rgb(0x5e84f1).into(),
+                ChatRole::Member => rgb(0x2ba640).into(),
+                ChatRole::Viewer => p.text2,
+            };
+            let mut row = div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .py_1()
+                .child(avatar(m.author_photo.as_deref(), px(24.), &m.author, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap_1()
+                                .items_center()
+                                .child(div().text_color(name_color).font_weight(FontWeight::MEDIUM).child(m.author.clone()))
+                                .when(m.role == ChatRole::Moderator, |d| d.child(icon("wrench").size_3().text_color(name_color)))
+                                .when(m.verified, |d| d.child(icon("circle-check").size_3().text_color(p.text2)))
+                                .when_some(m.paid.clone(), |d, a| d.child(div().px_1p5().rounded_md().bg(rgb(0xe62117)).text_color(white()).text_xs().font_weight(FontWeight::BOLD).child(a))),
+                        )
+                        .child(div().text_color(p.text).child(m.text.clone())),
+                );
+            if m.paid.is_some() {
+                row = row.px_2().rounded_lg().bg(p.hover);
+            }
+            list = list.child(row);
+        }
+        if let (Some(e), false) = (&chat.error, chat.messages.is_empty()) {
+            list = list.child(div().py_2().text_xs().text_color(p.text3).child(e.clone()));
+        }
+        let signed_in = crate::api::auth::signed_in();
+        let input_row = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(p.border)
+            .child(div().flex_1().min_w_0().child(Input::new(&chat.input).disabled(!signed_in || chat.sending)))
+            .when(signed_in, |d| {
+                d.child(icon_button("chat-send", "send", cx).on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(c) = &this.chat {
+                        let t = c.input.read(cx).value().to_string();
+                        this.send_chat(t, window, cx);
+                    }
+                })))
+            });
+        panel = panel.child(list).child(input_row);
+        Some(panel.into_any_element())
     }
 
     fn load(&mut self, cx: &mut Context<Self>) {
@@ -150,7 +408,11 @@ impl WatchPage {
                         }
                         cx.set_global(AutoplayNext(next));
                         let comments_token = w.comments_token.clone();
+                        let has_chat = w.live_chat.is_some();
                         this.info = Load::Ready(w);
+                        if has_chat {
+                            this.start_chat(cx);
+                        }
                         if !s.hide_comments {
                             if let Some(t) = comments_token {
                                 this.load_comments(t, false, cx);
@@ -210,7 +472,14 @@ impl WatchPage {
                             c.continuation = page.continuation;
                         }
                     }
-                    (Ok(page), false) => this.comments = Some(Load::Ready(page)),
+                    (Ok(mut page), false) => {
+                        if page.sort_top_token.is_none() && page.sort_new_token.is_none() {
+                            if let Some(w) = this.info.ready() {
+                                (page.sort_top_token, page.sort_new_token) = w.comments_sort.clone();
+                            }
+                        }
+                        this.comments = Some(Load::Ready(page))
+                    }
                     (Err(e), false) => this.comments = Some(Load::Error(e.to_string())),
                     (Err(_), true) => {
                         if let Some(Load::Ready(c)) = this.comments.as_mut() {
@@ -635,33 +904,88 @@ impl WatchPage {
             Load::Ready(c) => c.clone(),
         };
         let sort_new = self.comment_sort_new;
+        let timed = self.comment_timed;
         let (top, new) = (data.sort_top_token.clone(), data.sort_new_token.clone());
         let mut col = div().flex().flex_col().gap_6().pt_6().child(
             div()
                 .flex()
                 .items_center()
                 .gap_6()
-                .child(div().text_xl().font_weight(FontWeight::BOLD).text_color(p.text).child(format!("{} Comments", data.count_text.clone().or(w.comment_count_text.clone()).unwrap_or_default())))
+                .child(div().text_xl().font_weight(FontWeight::BOLD).text_color(p.text).child({
+                    let n = data.count_text.clone().or(w.comment_count_text.clone()).unwrap_or_default();
+                    if n.to_lowercase().contains("comment") { n } else { format!("{n} Comments").trim().to_string() }
+                }))
                 .child(
                     div()
                         .flex()
                         .gap_2()
                         .when_some(top, |d, t| {
-                            d.child(chip("c-top", "Top", !sort_new, cx).on_click(cx.listener(move |this, _, _, cx| {
+                            d.child(chip("c-top", "Top", !sort_new && !timed, cx).on_click(cx.listener(move |this, _, _, cx| {
                                 this.comment_sort_new = false;
+                                this.comment_timed = false;
                                 this.load_comments(t.clone(), false, cx);
                             })))
                         })
                         .when_some(new, |d, t| {
-                            d.child(chip("c-new", "Newest", sort_new, cx).on_click(cx.listener(move |this, _, _, cx| {
+                            d.child(chip("c-new", "Newest", sort_new && !timed, cx).on_click(cx.listener(move |this, _, _, cx| {
                                 this.comment_sort_new = true;
+                                this.comment_timed = false;
                                 this.load_comments(t.clone(), false, cx);
                             })))
-                        }),
+                        })
+                        .child(chip("c-timed", "Timed", timed, cx).on_click(cx.listener(|this, _, _, cx| {
+                            this.comment_timed ^= true;
+                            cx.notify();
+                        }))),
                 ),
         );
-        for c in &data.comments {
-            col = col.child(self.render_comment(c, false, cx));
+        if timed {
+            let now = player(cx).read(cx).time;
+            let mut stamped: Vec<(f64, &Comment)> = data.comments.iter().filter_map(|c| first_timestamp(&c.text).map(|t| (t, c))).collect();
+            stamped.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let current = stamped.iter().rposition(|(t, _)| *t <= now + 0.5);
+            if stamped.is_empty() {
+                col = col.child(div().text_sm().text_color(p.text2).child("No comments with timestamps yet. More appear as you scroll and load comments."));
+            }
+            for (i, (t, c)) in stamped.into_iter().enumerate() {
+                let t2 = t;
+                col = col.child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .p_2()
+                        .rounded_lg()
+                        .when(current == Some(i), |d| d.bg(p.hover))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("ctime-{}", c.id)))
+                                .flex_none()
+                                .h_6()
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .rounded_md()
+                                .bg(p.chip)
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(p.link)
+                                .cursor_pointer()
+                                .child(crate::api::json::format_duration(t as u64))
+                                .on_click(move |_, _, cx| {
+                                    player(cx).update(cx, |p, cx| {
+                                        p.seek_to(t2);
+                                        p.set_paused(false);
+                                        cx.notify();
+                                    })
+                                }),
+                        )
+                        .child(div().flex_1().min_w_0().child(self.render_comment(c, false, cx))),
+                );
+            }
+        } else {
+            for c in &data.comments {
+                col = col.child(self.render_comment(c, false, cx));
+            }
         }
         if data.continuation.is_some() && self.comments_more_loading {
             col = col.child(spinner(cx));
@@ -889,8 +1213,9 @@ impl Render for WatchPage {
             _ => spinner(cx).into_any_element(),
         };
         let queue_panel = self.render_queue_panel(cx);
+        let chat_panel = self.render_chat(cx);
         let related = info.as_ref().map(|w| self.render_related(w, cx));
-        let secondary = div().flex().flex_col().w(if two_col { side_w } else { avail }).flex_none().children(queue_panel).children(related);
+        let secondary = div().flex().flex_col().w(if two_col { side_w } else { avail }).flex_none().children(chat_panel).children(queue_panel).children(related);
         let player_box = div().w(if ui.theater { vp.width } else { primary_w }).h(player_h).flex_none().when(!ui.theater, |d| d.rounded_xl().overflow_hidden()).child(crate::ui::slot::player_slot(cx));
 
         let body = if ui.theater {

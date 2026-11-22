@@ -76,14 +76,14 @@ impl<T: 'static> DeferExt<T> for Context<'_, T> {
 // ───────────────────────── rich text (links, timestamps, hashtags) ─────────────────────────
 
 #[derive(Clone)]
-enum Token {
+pub(crate) enum Token {
     Url(String),
     Time(f64),
     Hashtag(String),
     Handle(String),
 }
 
-fn tokenize(text: &str) -> Vec<(std::ops::Range<usize>, Token)> {
+pub(crate) fn tokenize(text: &str) -> Vec<(std::ops::Range<usize>, Token)> {
     let mut out = Vec::new();
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -126,53 +126,107 @@ fn tokenize(text: &str) -> Vec<(std::ops::Range<usize>, Token)> {
     out
 }
 
-pub fn rich_text(id: impl Into<ElementId>, text: String, cx: &App) -> AnyElement {
-    let p = pal(cx);
-    let toks = tokenize(&text);
-    let highlights: Vec<_> = toks
-        .iter()
-        .map(|(r, _)| (r.clone(), HighlightStyle { color: Some(p.link), ..Default::default() }))
-        .collect();
-    let ranges: Vec<_> = toks.iter().map(|(r, _)| r.clone()).collect();
-    let tokens: Vec<Token> = toks.into_iter().map(|(_, t)| t).collect();
-    InteractiveText::new(id, StyledText::new(text).with_highlights(highlights))
-        .on_click(ranges, move |ix, window, cx| match tokens[ix].clone() {
+/// Escapes text so Markdown shows it literally.
+fn md_escape(t: &str, out: &mut String) {
+    for c in t.chars() {
+        if c.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+}
+
+/// Plain text with links, timestamps, #hashtags and @handles as Markdown links
+/// (app-internal schemes for the non-URL ones), line breaks kept.
+fn to_markdown(text: &str) -> String {
+    let mut md = String::with_capacity(text.len() + 64);
+    let mut last = 0;
+    for (r, tok) in tokenize(text) {
+        md_escape(&text[last..r.start], &mut md);
+        let label = &text[r.clone()];
+        md.push('[');
+        md_escape(label, &mut md);
+        md.push_str("](");
+        match tok {
             Token::Url(u) => {
-                if let Some(r) = crate::api::innertube::parse_youtube_url(&u) {
-                    let route = match r {
-                        crate::api::innertube::ResolvedUrl::Video(id) => crate::ui::app::Route::Watch { id, playlist: None, start: None },
-                        crate::api::innertube::ResolvedUrl::Channel(id) => crate::ui::app::Route::Channel(id),
-                        crate::api::innertube::ResolvedUrl::Playlist(id) => crate::ui::app::Route::Playlist(id),
-                    };
-                    crate::ui::app::navigate(route, window, cx);
-                } else {
-                    let _ = open::that(u);
-                }
+                md.push('<');
+                md.push_str(&u.replace(['<', '>', ' '], ""));
+                md.push('>');
             }
-            Token::Time(t) => {
-                let pl = crate::player::controller::player(cx);
-                pl.update(cx, |p, cx| {
-                    p.seek_to(t);
-                    p.set_paused(false);
-                    cx.notify();
+            Token::Time(t) => md.push_str(&format!("st-time:{}", t as u64)),
+            Token::Hashtag(h) => md.push_str(&format!("st-tag:{}", crate::api::http::urlencode(&h))),
+            Token::Handle(h) => md.push_str(&format!("st-handle:{}", crate::api::http::urlencode(&h))),
+        }
+        md.push(')');
+        last = r.end;
+    }
+    md_escape(&text[last..], &mut md);
+    // single newlines are hard breaks, not spaces
+    md.replace("\r\n", "\n").replace('\n', "  \n")
+}
+
+fn open_link(url: &str, window: &mut Window, cx: &mut App) {
+    if let Some(t) = url.strip_prefix("st-time:") {
+        let t: f64 = t.parse().unwrap_or(0.0);
+        crate::player::controller::player(cx).update(cx, |p, cx| {
+            p.seek_to(t);
+            p.set_paused(false);
+            cx.notify();
+        });
+    } else if let Some(h) = url.strip_prefix("st-tag:") {
+        crate::ui::app::navigate(crate::ui::app::Route::Search(crate::api::http::urldecode(h)), window, cx);
+    } else if let Some(h) = url.strip_prefix("st-handle:") {
+        let url = format!("https://www.youtube.com/{}", crate::api::http::urldecode(h));
+        cx.spawn(async move |cx| {
+            if let Ok(crate::api::innertube::ResolvedUrl::Channel(id)) = blocking(move || crate::api::innertube::resolve_url(&url)).await {
+                let _ = cx.update(|cx| {
+                    if let Some(w) = cx.active_window() {
+                        let _ = w.update(cx, |_, window, cx| crate::ui::app::navigate(crate::ui::app::Route::Channel(id), window, cx));
+                    }
                 });
             }
-            Token::Hashtag(h) => crate::ui::app::navigate(crate::ui::app::Route::Search(h), window, cx),
-            Token::Handle(h) => {
-                let url = format!("https://www.youtube.com/{h}");
-                cx.spawn(async move |cx| {
-                    if let Ok(crate::api::innertube::ResolvedUrl::Channel(id)) =
-                        blocking(move || crate::api::innertube::resolve_url(&url)).await
-                    {
-                        let _ = cx.update(|cx| {
-                            if let Some(w) = cx.active_window() {
-                                let _ = w.update(cx, |_, window, cx| crate::ui::app::navigate(crate::ui::app::Route::Channel(id), window, cx));
-                            }
-                        });
-                    }
-                })
-                .detach();
+        })
+        .detach();
+    } else if let Some(r) = crate::api::innertube::parse_youtube_url(url) {
+        let route = match r {
+            crate::api::innertube::ResolvedUrl::Video(id) => crate::ui::app::Route::Watch { id, playlist: None, start: None },
+            crate::api::innertube::ResolvedUrl::Channel(id) => crate::ui::app::Route::Channel(id),
+            crate::api::innertube::ResolvedUrl::Playlist(id) => crate::ui::app::Route::Playlist(id),
+        };
+        crate::ui::app::navigate(route, window, cx);
+    } else {
+        let _ = open::that(url);
+    }
+}
+
+/// Selectable text (drag to select, Ctrl+C) with clickable links, timestamps,
+/// hashtags and handles. Right-click copies the whole text.
+pub fn rich_text(id: impl Into<ElementId>, text: String, cx: &App) -> AnyElement {
+    let p = pal(cx);
+    let urls: Vec<String> = tokenize(&text).into_iter().filter_map(|(_, t)| if let Token::Url(u) = t { Some(u) } else { None }).collect();
+    let view = gpui_kit::base::TextView::markdown(id, to_markdown(&text))
+        .selectable(true)
+        .on_link_click(|url, _, window, cx| open_link(url, window, cx));
+    let copy_text = text.clone();
+    let _ = p;
+    div()
+        .w_full()
+        .child(view)
+        .on_mouse_down(MouseButton::Right, move |ev: &MouseDownEvent, window, cx| {
+            cx.stop_propagation();
+            let t = copy_text.clone();
+            let mut items = vec![crate::ui::app::MenuItem::new("copy", "Copy all text", move |_, cx| crate::ui::copy_to_clipboard(t.clone(), cx))];
+            for u in urls.iter().take(3) {
+                let u2 = u.clone();
+                let label = if u.chars().count() > 40 { format!("Copy link {}…", u.chars().take(40).collect::<String>()) } else { format!("Copy link {u}") };
+                items.push(crate::ui::app::MenuItem::new("link", label, move |_, cx| crate::ui::copy_to_clipboard(u2.clone(), cx)));
             }
+            crate::ui::app::open_menu(ev.position, items, window, cx);
         })
         .into_any_element()
+}
+
+/// First timestamp ("1:23", "1:02:03") mentioned in a text, in seconds.
+pub fn first_timestamp(text: &str) -> Option<f64> {
+    tokenize(text).into_iter().find_map(|(_, t)| if let Token::Time(s) = t { Some(s) } else { None })
 }

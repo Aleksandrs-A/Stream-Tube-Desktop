@@ -5,30 +5,181 @@ use crate::ui::widgets::*;
 use crate::ui::*;
 use gpui_kit::component::input::{Input, InputState};
 
+#[derive(Clone, Copy, PartialEq)]
+enum HistTab {
+    Account,
+    Device,
+    Searches,
+}
+
 pub struct HistoryPage {
     filter: Entity<InputState>,
     scroll: ScrollHandle,
     limit: usize,
+    tab: HistTab,
+    /// the signed-in account's YouTube watch history
+    yt: Option<Load<Vec<crate::api::types::VideoItem>>>,
+    yt_cont: Option<String>,
+    yt_loading_more: bool,
+}
+
+fn only_videos(items: Vec<crate::api::types::Item>) -> impl Iterator<Item = crate::api::types::VideoItem> {
+    items.into_iter().filter_map(|i| if let crate::api::types::Item::Video(v) = i { Some(v) } else { None })
 }
 
 impl HistoryPage {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Search watch history"));
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Search history"));
         cx.observe(&filter, |_, _, cx| cx.notify()).detach();
-        Self { filter, scroll: ScrollHandle::new(), limit: 100 }
+        let signed_in = crate::api::auth::signed_in();
+        let mut s = Self {
+            filter,
+            scroll: ScrollHandle::new(),
+            limit: 100,
+            tab: if signed_in { HistTab::Account } else { HistTab::Device },
+            yt: None,
+            yt_cont: None,
+            yt_loading_more: false,
+        };
+        if signed_in {
+            s.yt = Some(Load::Loading);
+            cx.spawn(async move |this, cx| {
+                let res = blocking(crate::api::auth::history).await;
+                let _ = this.update(cx, |t, cx| {
+                    t.yt = Some(match res {
+                        Ok(page) => {
+                            t.yt_cont = page.continuation;
+                            Load::Ready(only_videos(page.items).collect())
+                        }
+                        Err(e) => Load::Error(e.to_string()),
+                    });
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        s
     }
+
+    fn load_more_yt(&mut self, cx: &mut Context<Self>) {
+        let Some(tok) = self.yt_cont.take() else {
+            self.yt_loading_more = false;
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let res = blocking(move || crate::api::auth::browse_continue(&tok)).await;
+            let _ = this.update(cx, |t, cx| {
+                t.yt_loading_more = false;
+                if let Ok(page) = res {
+                    t.yt_cont = page.continuation;
+                    if let Some(Load::Ready(list)) = &mut t.yt {
+                        let seen: std::collections::HashSet<String> = list.iter().map(|v| v.id.clone()).collect();
+                        list.extend(only_videos(page.items).filter(|v| !seen.contains(&v.id)));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn account_list(&mut self, q: &str, cx: &mut Context<Self>) -> Div {
+        let mut list = div().flex().flex_col().gap_4().flex_1().min_w_0();
+        let has_more = self.yt_cont.is_some();
+        let shown: Vec<crate::api::types::VideoItem> = match &self.yt {
+            None => return list.child(empty_state("history", "Sign in to see your YouTube watch history", "", cx)),
+            Some(Load::Loading) => return list.child(loading_row(cx)),
+            Some(Load::Error(e)) => {
+                let e = e.clone();
+                return list.child(empty_state("cloud-off", "Could not load your YouTube history", &e, cx));
+            }
+            Some(Load::Ready(videos)) => {
+                let ql = q.to_lowercase();
+                videos.iter().filter(|v| ql.is_empty() || v.title.to_lowercase().contains(&ql) || v.channel_name.to_lowercase().contains(&ql)).cloned().collect()
+            }
+        };
+        if shown.is_empty() {
+            list = list.child(empty_state("history", if q.is_empty() { "Your YouTube watch history is empty" } else { "No matches" }, "", cx));
+        }
+        for v in &shown {
+            list = list.child(video_row(v, px(246.), cx));
+        }
+        if has_more {
+            list = list.child(loading_row(cx));
+        }
+        list
+    }
+
+    fn search_list(&mut self, q: &str, cx: &mut Context<Self>) -> Div {
+        let p = pal(cx);
+        let mut list = div().flex().flex_col().gap_1().flex_1().min_w_0();
+        let ql = q.to_lowercase();
+        let items: Vec<String> = store::search_history("", 500).into_iter().filter(|s| ql.is_empty() || s.to_lowercase().contains(&ql)).collect();
+        if items.is_empty() {
+            return list.child(empty_state("search", if q.is_empty() { "No searches yet" } else { "No matches" }, "Searches made in this app show here", cx));
+        }
+        for (i, item) in items.into_iter().enumerate() {
+            let (a, b) = (item.clone(), item.clone());
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("sh-{i}")))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .cursor_pointer()
+                    .hover(|d| d.bg(p.hover))
+                    .on_click(move |_, window, cx| navigate(Route::Search(a.clone()), window, cx))
+                    .child(icon("history").size_4().text_color(p.text2))
+                    .child(div().flex_1().min_w_0().truncate().text_color(p.text).child(item))
+                    .child(icon_button(SharedString::from(format!("shx-{i}")), "x", cx).on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        store::search_history_remove(&b);
+                        cx.refresh_windows();
+                    })),
+            );
+        }
+        list
+    }
+}
+
+fn loading_row(cx: &App) -> Div {
+    let p = pal(cx);
+    div().py_6().flex().justify_center().text_color(p.text2).child("Loading…")
 }
 
 impl Render for HistoryPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = pal(cx);
         let s = store::settings_snapshot();
-        if near_bottom(&self.scroll, 800.0) {
-            self.limit += 100;
-        }
         let q = self.filter.read(cx).value().to_string();
-        let entries = store::history_list(&q, self.limit);
+        if near_bottom(&self.scroll, 800.0) {
+            match self.tab {
+                HistTab::Device => self.limit += 100,
+                HistTab::Account if !self.yt_loading_more && self.yt_cont.is_some() => {
+                    self.yt_loading_more = true;
+                    cx.defer_in_entity(|t, cx| t.load_more_yt(cx));
+                }
+                _ => {}
+            }
+        }
         let width = content_width(cx).min(px(1100.));
+        let signed_in = crate::api::auth::signed_in();
+        let mut tabs = div().flex().gap_2();
+        let tab_defs: Vec<(HistTab, &str)> = if signed_in {
+            vec![(HistTab::Account, "YouTube history"), (HistTab::Device, "On this device"), (HistTab::Searches, "Searches")]
+        } else {
+            vec![(HistTab::Device, "Watched"), (HistTab::Searches, "Searches")]
+        };
+        for (t, label) in tab_defs {
+            tabs = tabs.child(chip(SharedString::from(format!("ht-{label}")), label, self.tab == t, cx).on_click(cx.listener(move |this, _, _, cx| {
+                this.tab = t;
+                cx.notify();
+            })));
+        }
+        let entries = if self.tab == HistTab::Device { store::history_list(&q, self.limit) } else { Vec::new() };
         let mut list = div().flex().flex_col().gap_4().flex_1().min_w_0();
         let mut cur_day = String::new();
         for h in &entries {
@@ -53,7 +204,11 @@ impl Render for HistoryPage {
                     })),
             );
         }
-        if entries.is_empty() {
+        if self.tab == HistTab::Account {
+            list = self.account_list(&q, cx);
+        } else if self.tab == HistTab::Searches {
+            list = self.search_list(&q, cx);
+        } else if entries.is_empty() {
             list = list.child(empty_state("history", if q.is_empty() { "Your watch history is empty" } else { "No matches" }, "", cx));
         }
         let side = div()
@@ -91,7 +246,8 @@ impl Render for HistoryPage {
                     .flex()
                     .flex_col()
                     .gap_4()
-                    .child(section_title("Watch history", cx).text_3xl())
+                    .child(section_title("History", cx).text_3xl())
+                    .child(tabs)
                     .child(div().flex().gap_8().child(list).child(side)),
             ),
         )
@@ -100,11 +256,28 @@ impl Render for HistoryPage {
 
 pub struct LibraryPage {
     scroll: ScrollHandle,
+    /// the signed-in account's YouTube playlists
+    yt: Option<Load<Vec<crate::api::types::PlaylistItem>>>,
 }
 
 impl LibraryPage {
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
-        Self { scroll: ScrollHandle::new() }
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut s = Self { scroll: ScrollHandle::new(), yt: None };
+        if crate::api::auth::signed_in() {
+            s.yt = Some(Load::Loading);
+            cx.spawn(async move |this, cx| {
+                let res = blocking(crate::api::auth::my_playlists).await;
+                let _ = this.update(cx, |t, cx| {
+                    t.yt = Some(match res {
+                        Ok(l) => Load::Ready(l),
+                        Err(e) => Load::Error(e.to_string()),
+                    });
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        s
     }
 }
 
@@ -193,7 +366,15 @@ impl Render for LibraryPage {
                             .child(div().flex().gap_4().overflow_hidden().children(history.iter().take(6).map(|v| video_card(v, hw, true, cx)))),
                     )
                 })
-                .child(div().flex().flex_col().gap_4().child(section_title("Your playlists", cx)).child(grid(cards, width)))
+                .when_some(self.yt.as_ref().map(|l| match l {
+                    Load::Loading => spinner(cx).into_any_element(),
+                    Load::Error(e) => div().text_sm().text_color(p.text2).child(format!("Could not load your YouTube playlists: {e}")).into_any_element(),
+                    Load::Ready(l) if l.is_empty() => div().text_sm().text_color(p.text2).child("No playlists on your account yet").into_any_element(),
+                    Load::Ready(l) => grid(l.iter().map(|pl| playlist_card(pl, w, cx)).collect(), width).into_any_element(),
+                }), |d, body| {
+                    d.child(div().flex().flex_col().gap_4().child(section_title("Your YouTube playlists", cx)).child(body))
+                })
+                .child(div().flex().flex_col().gap_4().child(section_title("On this computer", cx)).child(grid(cards, width)))
                 .when(!saved.is_empty(), |d| {
                     d.child(
                         div()

@@ -6,6 +6,7 @@ use crate::player::controller::player;
 use crate::store;
 use crate::ui::app::{Route, UiState, navigate};
 use crate::ui::*;
+use crate::ui::widgets::{Load, rich_text};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -20,10 +21,24 @@ pub struct ShortsPage {
     last_wheel: Instant,
     wheel_used: bool,
     continuation: Option<String>,
+    /// `true` while the reel sequence feeds the list (its continuation is a reel token)
+    reel_feed: bool,
+    /// title / channel / comments token per Short (the feed only carries ids)
+    meta: HashMap<String, WatchInfo>,
+    show_comments: bool,
+    comments: Option<Load<CommentPage>>,
+    comments_for: String,
+    comments_more: bool,
+    _sub: Subscription,
 }
 
 impl ShortsPage {
     pub fn new(start: Option<String>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let sub = cx.subscribe(&player(cx), |this: &mut Self, _, ev: &crate::player::controller::PlayerEvent, cx| {
+            if matches!(ev, crate::player::controller::PlayerEvent::Ended) && store::settings_snapshot().shorts_autoadvance {
+                this.advance(cx);
+            }
+        });
         cx.on_release(|_, cx| {
             let l = store::settings_snapshot().loop_video;
             player(cx).update(cx, |p, _| p.set_loop(l));
@@ -39,6 +54,13 @@ impl ShortsPage {
             last_wheel: Instant::now(),
             wheel_used: false,
             continuation: None,
+            reel_feed: false,
+            meta: HashMap::new(),
+            show_comments: false,
+            comments: None,
+            comments_for: String::new(),
+            comments_more: false,
+            _sub: sub,
         };
         if let Some(id) = &start {
             s.list.push(VideoItem { id: id.clone(), is_short: true, thumbnail: innertube::default_thumb(id), ..Default::default() });
@@ -47,7 +69,13 @@ impl ShortsPage {
         let start2 = start.clone();
         cx.spawn(async move |this, cx| {
             let res = blocking(move || {
-                // subscription shorts first, then a general shorts search
+                // YouTube's own Shorts sequence: different on every visit
+                if let Ok((items, cont)) = innertube::shorts_feed(None) {
+                    if !items.is_empty() {
+                        return (items, cont, true);
+                    }
+                }
+                // fallback: subscription shorts, then a shorts search
                 let (feed, _) = crate::feed::cached_feed(None);
                 let mut out: Vec<VideoItem> = feed.into_iter().filter(|v| v.is_short).take(30).collect();
                 let f = SearchFilter { duration: 1, kind: 1, ..Default::default() };
@@ -62,7 +90,7 @@ impl ShortsPage {
                         _ => None,
                     }));
                 }
-                (out, cont)
+                (out, cont, false)
             })
             .await;
             let _ = this.update(cx, |this, cx| {
@@ -75,6 +103,7 @@ impl ShortsPage {
                     }
                 }
                 this.continuation = res.1;
+                this.reel_feed = res.2;
                 if start2.is_none() && !this.list.is_empty() {
                     this.play_current(cx);
                 }
@@ -91,9 +120,16 @@ impl ShortsPage {
         pl.update(cx, |p, cx| {
             p.queue.clear();
             p.queue_pos = None;
-            p.set_loop(true);
+            p.set_loop(!store::settings_snapshot().shorts_autoadvance);
             p.play(v.clone(), Some(0.0), cx);
         });
+        self.fetch_meta(v.id.clone(), cx);
+        if let Some(n) = self.list.get(self.idx + 1) {
+            self.fetch_meta(n.id.clone(), cx);
+        }
+        if self.show_comments {
+            self.open_comments(cx);
+        }
         if store::settings_snapshot().ryd && !self.votes.contains_key(&v.id) {
             let id = v.id.clone();
             cx.spawn(async move |this, cx| {
@@ -110,16 +146,35 @@ impl ShortsPage {
         // prefetch more when near the end
         if self.idx + 3 >= self.list.len() {
             if let Some(tok) = self.continuation.take() {
+                let reel = self.reel_feed;
                 cx.spawn(async move |this, cx| {
-                    if let Ok(p) = blocking(move || innertube::search_continue(&tok)).await {
+                    let res = blocking(move || {
+                        if reel {
+                            innertube::shorts_feed(Some(&tok))
+                        } else {
+                            innertube::search_continue(&tok).map(|p| {
+                                let items = p
+                                    .items
+                                    .into_iter()
+                                    .filter_map(|i| match i {
+                                        Item::Video(mut v) => {
+                                            v.is_short = true;
+                                            Some(v)
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect();
+                                (items, p.continuation)
+                            })
+                        }
+                    })
+                    .await;
+                    if let Ok((items, cont)) = res {
                         let _ = this.update(cx, |t, cx| {
-                            t.continuation = p.continuation;
-                            for i in p.items {
-                                if let Item::Video(mut v) = i {
-                                    v.is_short = true;
-                                    if !t.list.iter().any(|x| x.id == v.id) {
-                                        t.list.push(v);
-                                    }
+                            t.continuation = cont;
+                            for v in items {
+                                if !t.list.iter().any(|x| x.id == v.id) {
+                                    t.list.push(v);
                                 }
                             }
                             cx.notify();
@@ -130,6 +185,232 @@ impl ShortsPage {
             }
         }
         cx.notify();
+    }
+
+    fn fetch_meta(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.meta.contains_key(&id) {
+            return;
+        }
+        self.meta.insert(id.clone(), WatchInfo { id: id.clone(), ..Default::default() });
+        cx.spawn(async move |this, cx| {
+            let id2 = id.clone();
+            let res = blocking(move || innertube::watch_next(&id2, None)).await;
+            let _ = this.update(cx, |t, cx| {
+                match res {
+                    Ok(w) => {
+                        if let Some(v) = t.list.iter_mut().find(|v| v.id == id) {
+                            if v.title.is_empty() {
+                                v.title = w.title.clone();
+                            }
+                            if v.channel_name.is_empty() {
+                                v.channel_name = w.channel.name.clone();
+                            }
+                            if v.channel_id.is_none() && !w.channel.id.is_empty() {
+                                v.channel_id = Some(w.channel.id.clone());
+                            }
+                            if v.channel_avatar.is_none() {
+                                v.channel_avatar = w.channel.avatar.clone();
+                            }
+                        }
+                        t.meta.insert(id.clone(), w);
+                        let current = t.list.get(t.idx).map(|v| v.id == id).unwrap_or(false);
+                        if t.show_comments && current && t.comments.is_none() {
+                            t.comments_for.clear();
+                            t.open_comments(cx);
+                        }
+                    }
+                    Err(_) => {
+                        t.meta.remove(&id);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Loads comments for the current Short into the side panel.
+    fn open_comments(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.list.get(self.idx) else { return };
+        let id = v.id.clone();
+        self.show_comments = true;
+        if self.comments_for == id && self.comments.is_some() {
+            cx.notify();
+            return;
+        }
+        self.comments_for = id.clone();
+        let token = self.meta.get(&id).and_then(|w| w.comments_token.clone());
+        let Some(token) = token else {
+            // still waiting for the watch info, or comments are off
+            let pending = self.meta.get(&id).map(|w| w.title.is_empty()).unwrap_or(true);
+            self.comments = if pending { None } else { Some(Load::Error("Comments are turned off.".into())) };
+            cx.notify();
+            return;
+        };
+        self.comments = Some(Load::Loading);
+        cx.spawn(async move |this, cx| {
+            let res = blocking(move || innertube::comments(&token)).await;
+            let _ = this.update(cx, |t, cx| {
+                if t.comments_for == id {
+                    let sort = t.meta.get(&id).map(|w| w.comments_sort.clone()).unwrap_or_default();
+                    t.comments = Some(match res {
+                        Ok(mut p) => {
+                            if p.sort_top_token.is_none() && p.sort_new_token.is_none() {
+                                (p.sort_top_token, p.sort_new_token) = sort;
+                            }
+                            Load::Ready(p)
+                        }
+                        Err(e) => Load::Error(e.to_string()),
+                    });
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn load_comment_page(&mut self, token: String, append: bool, cx: &mut Context<Self>) {
+        if self.comments_more {
+            return;
+        }
+        self.comments_more = append;
+        if !append {
+            self.comments = Some(Load::Loading);
+        }
+        let id = self.comments_for.clone();
+        cx.spawn(async move |this, cx| {
+            let res = blocking(move || innertube::comments(&token)).await;
+            let _ = this.update(cx, |t, cx| {
+                t.comments_more = false;
+                if t.comments_for != id {
+                    return;
+                }
+                match (res, append) {
+                    (Ok(mut p), false) => {
+                        if p.sort_top_token.is_none() && p.sort_new_token.is_none() {
+                            (p.sort_top_token, p.sort_new_token) = t.meta.get(&id).map(|w| w.comments_sort.clone()).unwrap_or_default();
+                        }
+                        t.comments = Some(Load::Ready(p))
+                    }
+                    (Err(e), false) => t.comments = Some(Load::Error(e.to_string())),
+                    (res, true) => {
+                        if let Some(Load::Ready(c)) = t.comments.as_mut() {
+                            match res {
+                                Ok(p) => {
+                                    c.comments.extend(p.comments);
+                                    c.continuation = p.continuation;
+                                }
+                                Err(_) => c.continuation = None,
+                            }
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn advance(&mut self, cx: &mut Context<Self>) {
+        if self.idx + 1 < self.list.len() {
+            self.idx += 1;
+            self.last_step = Instant::now();
+            self.play_current(cx);
+        }
+    }
+
+    fn render_comments(&mut self, h: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let ready = self.comments.as_ref().and_then(|c| c.ready());
+        let count = ready.and_then(|c| c.count_text.clone());
+        let top_tok = ready.and_then(|c| c.sort_top_token.clone());
+        let new_tok = ready.and_then(|c| c.sort_new_token.clone());
+        let sort_chip = |id: &'static str, label: &'static str, tok: Option<String>, cx: &mut Context<Self>| {
+            let p = pal(cx);
+            div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .rounded_full()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .bg(p.chip)
+                .text_color(p.text)
+                .cursor_pointer()
+                .hover(move |s| s.bg(p.hover))
+                .child(label)
+                .when_some(tok, |d, tok| d.on_click(cx.listener(move |t, _, _, cx| t.load_comment_page(tok.clone(), false, cx))))
+        };
+        let header = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .px_4()
+            .py_3()
+            .border_b_1()
+            .border_color(p.border)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap_2()
+                            .child(div().text_base().font_weight(FontWeight::BOLD).text_color(p.text).child("Comments"))
+                            .when_some(count, |d, c| d.child(div().text_sm().text_color(p.text2).child(c))),
+                    )
+                    .child(icon_button("sh-cm-close", "x", cx).on_click(cx.listener(|t, _, _, cx| {
+                        t.show_comments = false;
+                        cx.notify();
+                    }))),
+            )
+            .when(top_tok.is_some() || new_tok.is_some(), |d| {
+                d.child(div().flex().gap_2().child(sort_chip("sh-cm-top", "Top", top_tok, cx)).child(sort_chip("sh-cm-new", "Newest", new_tok, cx)))
+            });
+        let mut body = div().id("sh-cm-list").flex_1().min_h_0().overflow_y_scroll().px_4().py_3().flex().flex_col().gap_4();
+        match &self.comments {
+            None | Some(Load::Loading) => body = body.child(div().py_8().flex().justify_center().child(spinner(cx))),
+            Some(Load::Error(e)) => body = body.child(div().text_sm().text_color(p.text2).child(e.clone())),
+            Some(Load::Ready(page)) => {
+                if page.comments.is_empty() {
+                    body = body.child(div().text_sm().text_color(p.text2).child("No comments yet."));
+                }
+                for c in &page.comments {
+                    body = body.child(comment_row(c, cx));
+                }
+                if let Some(tok) = page.continuation.clone() {
+                    body = body.child(
+                        div()
+                            .id("sh-cm-more")
+                            .py_2()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(p.link)
+                            .cursor_pointer()
+                            .child(if self.comments_more { "Loading…" } else { "Show more comments" })
+                            .on_click(cx.listener(move |t, _, _, cx| t.load_comment_page(tok.clone(), true, cx))),
+                    );
+                }
+            }
+        }
+        div()
+            .flex()
+            .flex_col()
+            .w(px(380.))
+            .h(h)
+            .rounded_xl()
+            .overflow_hidden()
+            .bg(p.surface)
+            .border_1()
+            .border_color(p.border)
+            .child(header)
+            .child(body)
+            .into_any_element()
     }
 
     pub fn step(&mut self, d: i32, _window: &mut Window, cx: &mut Context<Self>) {
@@ -172,6 +453,7 @@ impl Render for ShortsPage {
                 .child(div().flex().items_center().justify_center().size_12().rounded_full().bg(p.chip).hover(move |s| s.bg(p.hover)).child(icon(ic).size_6().text_color(p.text)))
                 .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(p.text).child(label))
         };
+        let comments_panel = if self.show_comments { self.render_comments(h, cx) } else { div().into_any_element() };
         let can_up = self.idx > 0;
         let can_down = self.idx + 1 < self.list.len();
         div()
@@ -250,11 +532,23 @@ impl Render for ShortsPage {
                     .pb_4()
                     .child(action("sh-like", "thumbs-up", votes.as_ref().map(|v| compact_number(v.likes)).unwrap_or_else(|| "Like".into()), cx))
                     .child(action("sh-dislike", "thumbs-down", votes.as_ref().map(|v| compact_number(v.dislikes)).unwrap_or_else(|| "Dislike".into()), cx))
+                    .child({
+                        let n = self.meta.get(&v.id).and_then(|w| w.comment_count_text.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Comments".into());
+                        action("sh-comments", "message-square", n, cx).on_click(cx.listener(|t, _, _, cx| {
+                            if t.show_comments {
+                                t.show_comments = false;
+                                cx.notify();
+                            } else {
+                                t.open_comments(cx);
+                            }
+                        }))
+                    })
                     .child(action("sh-share", "share-2", "Share".into(), cx).on_click(move |_, _, cx| copy_to_clipboard(format!("https://youtube.com/shorts/{share_id}"), cx)))
                     .child(action("sh-watch", "monitor-play", "Full".into(), cx).on_click(move |_, window, cx| {
                         navigate(Route::Watch { id: watch_id.clone(), playlist: None, start: None }, window, cx)
                     })),
             )
+            .when(self.show_comments, |d| d.child(comments_panel))
             .child(
                 div()
                     .flex()
@@ -265,4 +559,44 @@ impl Render for ShortsPage {
             )
             .into_any_element()
     }
+}
+
+fn comment_row(c: &Comment, cx: &App) -> AnyElement {
+    let p = pal(cx);
+    div()
+        .flex()
+        .gap_3()
+        .child(avatar(c.author_avatar.as_deref(), px(32.), &c.author, cx))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(c.author.clone()))
+                        .child(div().text_color(p.text2).child(c.published.clone())),
+                )
+                .child(div().text_sm().text_color(p.text).child(rich_text(SharedString::from(format!("sct-{}", c.id)), c.text.clone(), cx)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .text_xs()
+                        .text_color(p.text2)
+                        .child(div().flex().items_center().gap_1().child(icon("thumbs-up").size_4().text_color(p.text2)).child(c.likes.clone()))
+                        .when(c.hearted, |d| d.child(icon("heart").size_4().text_color(rgb(0xff0033))))
+                        .when(!c.reply_count.is_empty() && c.reply_count != "0", |d| {
+                            d.child(div().text_color(p.link).child(format!("{} {}", c.reply_count, if c.reply_count == "1" { "reply" } else { "replies" })))
+                        }),
+                ),
+        )
+        .into_any_element()
 }

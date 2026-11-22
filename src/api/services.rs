@@ -245,3 +245,34 @@ mod tests {
         assert!(!vids.is_empty());
     }
 }
+
+/// Votes on a SponsorBlock segment (1 = upvote, 0 = downvote) with the user's private ID.
+pub fn sponsor_vote(server: &str, uuid: &str, user_id: &str, up: bool) -> Result<()> {
+    let url = format!(
+        "{}/api/voteOnSponsorTime?UUID={}&userID={}&type={}",
+        server.trim_end_matches('/'),
+        super::http::urlencode(uuid),
+        super::http::urlencode(user_id),
+        if up { 1 } else { 0 }
+    );
+    let (status, _) = super::http::post_json_status(&url, &serde_json::json!({}), &[])?;
+    if status >= 400 {
+        anyhow::bail!("server answered {status}");
+    }
+    Ok(())
+}
+
+/// A new random SponsorBlock private user ID (36 alphanumerics, like the browser extension).
+pub fn new_sb_user_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut out = String::with_capacity(36);
+    let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+    while out.len() < 36 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(seed);
+        seed = h.finish();
+        out.push(CHARS[(seed % CHARS.len() as u64) as usize] as char);
+    }
+    out
+}

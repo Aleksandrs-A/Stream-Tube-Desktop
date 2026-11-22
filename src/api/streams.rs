@@ -59,8 +59,22 @@ fn resolve(video_id: &str) -> Result<StreamInfo> {
     let mode = crate::store::settings_snapshot().stream_backend.clone();
     match mode.as_str() {
         "ytdlp" => ytdlp_streams(video_id),
-        "innertube" => android_vr(video_id),
+        "innertube" => visionos(video_id).or_else(|e| android_vr(video_id).map_err(|e2| anyhow!("{e}\n{e2}"))),
         _ => {
+            // The visionOS client hands out an HLS manifest that needs neither a
+            // PO token nor JS challenge solving: fast, and works signed out.
+            let t = std::time::Instant::now();
+            let vision = visionos(video_id);
+            if crate::perf::on() {
+                match &vision {
+                    Ok(i) => eprintln!("[streams] visionos ok in {:?}: {} variants, hls={:?}", t.elapsed(), i.video.len(), i.hls_url.as_deref().map(|u| &u[..u.len().min(80)])),
+                    Err(e) => eprintln!("[streams] visionos failed in {:?}: {e}", t.elapsed()),
+                }
+            }
+            let vision_err = match vision {
+                Ok(info) => return Ok(info),
+                Err(e) => e,
+            };
             let id = video_id.to_string();
             let vr = std::thread::spawn(move || android_vr(&id));
             let yd = ytdlp_streams(video_id);
@@ -78,9 +92,8 @@ fn resolve(video_id: &str) -> Result<StreamInfo> {
                 (Ok(y), Err(_)) => Ok(y),
                 // without yt-dlp, Innertube formats are the best we have
                 (Err(_), Ok(v)) if !v.video.is_empty() || v.hls_url.is_some() => Ok(v),
-                (Err(e1), Ok(_)) => Err(e1),
-                (Err(e1), Err(e2)) => Err(anyhow!("yt-dlp: {e1}
-Innertube: {e2}")),
+                (Err(e1), Ok(_)) => Err(anyhow!("{vision_err}\nyt-dlp: {e1}")),
+                (Err(e1), Err(e2)) => Err(anyhow!("{vision_err}\nyt-dlp: {e1}\nInnertube: {e2}")),
             }
         }
     }
@@ -139,6 +152,150 @@ pub fn visitor_data() -> Option<String> {
     let v = r.pointer("/responseContext/visitorData")?.as_str()?.to_string();
     *VD.lock() = Some((v.clone(), std::time::Instant::now()));
     Some(v)
+}
+
+const VISION_VERSION: &str = "1.02";
+const VISION_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+
+/// visionOS client: metadata, captions and storyboard from the player
+/// response, playback from its HLS manifest (variants up to 4K with separate
+/// audio renditions).
+fn visionos(video_id: &str) -> Result<StreamInfo> {
+    let s = crate::store::settings_snapshot();
+    let vd = visitor_data().unwrap_or_default();
+    let body = json!({
+        "videoId": video_id,
+        "contentCheckOk": true,
+        "racyCheckOk": true,
+        "context": { "client": {
+            "clientName": "VISIONOS", "clientVersion": VISION_VERSION,
+            "deviceMake": "Apple", "deviceModel": "RealityDevice17,1",
+            "osName": "visionOS", "osVersion": "26.5.23O471", "userAgent": VISION_UA,
+            "hl": s.language, "gl": s.region, "visitorData": vd
+        }}
+    });
+    let r = http::post_json(
+        "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+        &body,
+        &[
+            ("User-Agent", VISION_UA),
+            ("X-YouTube-Client-Name", "101"),
+            ("X-YouTube-Client-Version", VISION_VERSION),
+            ("X-Goog-Visitor-Id", &vd),
+            ("Origin", "https://www.youtube.com"),
+        ],
+    )?;
+    let status = r.pointer("/playabilityStatus/status").and_then(Value::as_str).unwrap_or("");
+    if status != "OK" {
+        let reason = r.pointer("/playabilityStatus/reason").and_then(Value::as_str).unwrap_or(status);
+        return Err(anyhow!("visionOS: {reason}"));
+    }
+    let mut info = parse_player(&r);
+    let hls = info.hls_url.clone().ok_or_else(|| anyhow!("visionOS: no HLS manifest"))?;
+    // adaptive URLs from this client need a PO token; only the HLS path is usable
+    info.audio.clear();
+    info.muxed.clear();
+    let (video, audio) = hls_variants(&hls).unwrap_or_default();
+    info.video = video;
+    // audio renditions (dubbed tracks): only names, the proxy picks the playlist
+    info.audio = audio;
+    info.hls_only = true;
+    info.source = "visionos";
+    Ok(info)
+}
+
+/// The variants of an HLS master playlist, as formats for the quality menu,
+/// plus its audio renditions (one per language, `audio_language` = display name).
+fn hls_variants(master_url: &str) -> Result<(Vec<StreamFormat>, Vec<StreamFormat>)> {
+    let text = http::get_text(master_url)?;
+    let attr = |l: &str, k: &str| -> Option<String> {
+        let rest = l.split(&format!("{k}=")).nth(1)?;
+        Some(if let Some(q) = rest.strip_prefix('"') { q.split('"').next()?.to_string() } else { rest.split(',').next()?.to_string() })
+    };
+    let mut out: Vec<StreamFormat> = Vec::new();
+    let mut audio: Vec<StreamFormat> = Vec::new();
+    let mut lines = text.lines();
+    while let Some(l) = lines.next() {
+        if l.starts_with("#EXT-X-MEDIA") && l.contains("TYPE=AUDIO") {
+            if let Some(name) = hls_media_name(l) {
+                if !audio.iter().any(|a| a.audio_language.as_deref() == Some(name.as_str())) {
+                    audio.push(StreamFormat {
+                        mime: "audio/hls".into(),
+                        is_audio: true,
+                        audio_default: name.to_lowercase().contains("original"),
+                        // the rendition's language code
+                        quality_label: attr(l, "LANGUAGE").unwrap_or_default(),
+                        audio_language: Some(name),
+                        ..Default::default()
+                    });
+                }
+            }
+            continue;
+        }
+        if !l.starts_with("#EXT-X-STREAM-INF") {
+            continue;
+        }
+        let Some(url) = lines.next() else { break };
+        let (w, h) = attr(l, "RESOLUTION")
+            .and_then(|r| r.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
+            .unwrap_or((0, 0));
+        let fps = attr(l, "FRAME-RATE").and_then(|f| f.parse::<f64>().ok()).unwrap_or(0.0) as u32;
+        let bitrate = attr(l, "BANDWIDTH").and_then(|b| b.parse().ok()).unwrap_or(0);
+        let class = quality_class(w, h);
+        // one entry per quality: keep the higher-bitrate variant
+        if let Some(e) = out.iter_mut().find(|e| quality_class(e.width, e.height) == class && e.fps == fps) {
+            if bitrate > e.bitrate {
+                e.bitrate = bitrate;
+                e.url = url.trim().to_string();
+            }
+            continue;
+        }
+        out.push(StreamFormat {
+            itag: 0,
+            url: url.trim().to_string(),
+            mime: "application/vnd.apple.mpegurl".into(),
+            codecs: attr(l, "CODECS").unwrap_or_default(),
+            bitrate,
+            width: w,
+            height: h,
+            fps,
+            quality_label: format!("{class}p{}", if fps > 30 { fps.to_string() } else { String::new() }),
+            ..Default::default()
+        });
+    }
+    if audio.len() < 2 {
+        audio.clear();
+    }
+    Ok((out, audio))
+}
+
+/// NAME="..." of an #EXT-X-MEDIA line.
+pub fn hls_media_name(l: &str) -> Option<String> {
+    let rest = l.split(",NAME=\"").nth(1).or_else(|| l.split(":NAME=\"").nth(1))?;
+    Some(rest.split('"').next()?.to_string())
+}
+
+/// Which HLS audio rendition to play: the user's pick, else the original
+/// (when forced) or the interface-language dub, else the original.
+pub fn hls_audio_choice(info: &StreamInfo, picked: Option<&str>) -> Option<String> {
+    if info.audio.is_empty() {
+        return None;
+    }
+    if let Some(p) = picked {
+        return Some(p.to_string());
+    }
+    let st = crate::store::settings_snapshot();
+    let original = info.audio.iter().find(|a| a.audio_default).and_then(|a| a.audio_language.clone());
+    if !st.original_audio {
+        let lang = st.language.to_lowercase();
+        if let Some(a) = info.audio.iter().find(|a| {
+            let code = a.quality_label.to_lowercase();
+            !lang.is_empty() && (code == lang || code.starts_with(&format!("{lang}-")))
+        }) {
+            return a.audio_language.clone();
+        }
+    }
+    original
 }
 
 fn android_vr(video_id: &str) -> Result<StreamInfo> {
@@ -332,8 +489,11 @@ pub fn hide_window(cmd: &mut Command) {
 pub fn ytdlp_streams(video_id: &str) -> Result<StreamInfo> {
     let bin = ytdlp_path().ok_or_else(|| anyhow!("yt-dlp not found (install it or set its path in Settings)"))?;
     let mut cmd = Command::new(bin);
-    cmd.args(["-J", "--no-warnings", "--no-playlist"])
-        .arg(format!("https://www.youtube.com/watch?v={video_id}"));
+    cmd.args(["-J", "--no-warnings", "--no-playlist"]);
+    if crate::store::settings_snapshot().ipv4_only {
+        cmd.arg("--force-ipv4");
+    }
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}"));
     hide_window(&mut cmd);
     let out = cmd.output()?;
     if !out.status.success() {

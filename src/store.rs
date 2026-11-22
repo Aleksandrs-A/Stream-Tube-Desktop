@@ -71,6 +71,8 @@ pub struct Settings {
     pub feed_include_live: bool,
     // Downloads / external
     pub download_dir: String,
+    /// The user picked (or accepted) the download folder; until then the first download asks.
+    pub download_dir_chosen: bool,
     pub download_format: String,
     pub external_player: String,
     // appearance / player customization
@@ -87,6 +89,9 @@ pub struct Settings {
     pub show_heatmap: bool,
     pub jump_ahead: bool,
     pub enhanced_bitrate: bool,
+    /// Connect to YouTube over IPv4 only. Many ISPs' IPv6 ranges get the
+    /// "confirm you're not a bot" wall while IPv4 from the same line doesn't.
+    pub ipv4_only: bool,
     pub background_play: bool,
     // Tweaks (from YouTube patch sets like Morphe/ReVanced)
     pub ambient_mode: bool,
@@ -163,7 +168,8 @@ impl Default for Settings {
             download_dir: dirs::download_dir()
                 .map(|d| d.join("Stream Tube").to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            download_format: "best".into(),
+            download_dir_chosen: false,
+            download_format: "1080".into(),
             external_player: String::new(),
             ui_scale: 1.0,
             density: "default".into(),
@@ -176,6 +182,7 @@ impl Default for Settings {
             show_heatmap: true,
             jump_ahead: true,
             enhanced_bitrate: false,
+            ipv4_only: true,
             background_play: true,
             ambient_mode: true,
             shorts_in_player: false,
@@ -223,6 +230,10 @@ pub fn update_settings(f: impl FnOnce(&mut Settings)) {
     *settings_lock().write() = Arc::new(s);
 }
 
+pub fn ip_family() -> ureq::config::IpFamily {
+    if settings_snapshot().ipv4_only { ureq::config::IpFamily::Ipv4Only } else { ureq::config::IpFamily::Any }
+}
+
 pub fn proxy_setting() -> Option<String> {
     let p = settings_snapshot().proxy.clone();
     (!p.trim().is_empty()).then_some(p)
@@ -231,6 +242,12 @@ pub fn proxy_setting() -> Option<String> {
 pub fn data_dir() -> PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
+        // a separate profile (portable use, clean test runs)
+        if let Some(d) = std::env::var_os("STREAMTUBE_DATA_DIR").filter(|d| !d.is_empty()) {
+            let d = PathBuf::from(d);
+            let _ = std::fs::create_dir_all(&d);
+            return d;
+        }
         let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
         let d = base.join("StreamTube");
         // carry over data from the app's previous name

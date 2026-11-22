@@ -153,6 +153,8 @@ pub struct Toast {
     pub id: u64,
     pub text: SharedString,
     pub action: Option<(SharedString, Arc<dyn Fn(&mut Window, &mut App)>)>,
+    /// further buttons after `action`
+    pub extra: Vec<(SharedString, Arc<dyn Fn(&mut Window, &mut App)>)>,
 }
 
 #[derive(Default)]
@@ -172,10 +174,15 @@ pub fn toast_with_action(
     text: impl Into<SharedString>,
     action: Option<(SharedString, Arc<dyn Fn(&mut Window, &mut App)>)>,
 ) {
+    toast_with_actions(cx, text, action.into_iter().collect());
+}
+
+pub fn toast_with_actions(cx: &mut App, text: impl Into<SharedString>, mut actions: Vec<(SharedString, Arc<dyn Fn(&mut Window, &mut App)>)>) {
+    let action = if actions.is_empty() { None } else { Some(actions.remove(0)) };
     let t = cx.default_global::<Toasts>();
     t.next += 1;
     let id = t.next;
-    t.items.push(Toast { id, text: text.into(), action });
+    t.items.push(Toast { id, text: text.into(), action, extra: actions });
     if t.items.len() > 4 {
         t.items.remove(0);
     }

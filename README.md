@@ -35,6 +35,8 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - libmpv player with hardware decoding, codec preference, speed control (remembered per channel if you want), captions and seek-bar preview thumbnails
 - Resumes where you left off, a miniplayer while you browse, and a picture-in-picture window
 - Keeps playing when minimized, has an audio-only mode, or can hand a video off to an external player
+- Live streams with live chat (Top chat or every message), and chatting when signed in
+- Hold Space or press and hold on the video to play at 2x
 
 **Less noise**
 - SponsorBlock with per-category behaviour: skip automatically, ask, only mark it on the seek bar, or ignore
@@ -45,7 +47,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
 **Your data stays yours**
 - Subscriptions can live locally. The feed is built by fetching each channel directly, no account needed
-- Or sign in with your Google account to get your own Home feed, subscriptions, likes and subscribe button
+- Or sign in with your Google account to get your own Home feed, subscriptions, watch history, playlists, likes and subscribe button
 - History, watch later, favourites and playlists are stored in a local SQLite database
 - Import from YouTube Takeout, NewPipe, FreeTube or OPML. Export to NewPipe JSON, YouTube CSV, OPML or a full backup
 
@@ -61,11 +63,11 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/subscriptions.png" alt="Subscriptions feed"></td>
+    <td><img src="docs/screenshots/live.png" alt="Live stream with live chat"></td>
     <td><img src="docs/screenshots/search.png" alt="Search results"></td>
   </tr>
   <tr>
-    <td align="center">Subscriptions</td>
+    <td align="center">Live streams with chat</td>
     <td align="center">Search</td>
   </tr>
   <tr>

@@ -226,6 +226,8 @@ pub fn confirm(title: &str, body: &str, confirm: &str, window: &mut Window, cx: 
 
 pub struct AppView {
     pub route: Route,
+    /// space is down: released quickly it toggles pause, held it plays at 2x
+    space_down: bool,
     page: AnyView,
     pub history: Vec<(Route, AnyView)>,
     forward: Vec<(Route, AnyView)>,
@@ -245,6 +247,12 @@ pub struct AppView {
     pending_watch_sync: Option<String>,
     login: LoginFlow,
     reload_page: bool,
+    /// slide-over sidebar on the watch page
+    drawer_open: bool,
+    /// sidebar subscriptions list: all channels instead of the first few
+    subs_expanded: bool,
+    /// downloads dropdown under the topbar button
+    dl_panel: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -253,6 +261,7 @@ impl AppView {
         cx.set_global(AppHandle(cx.entity().downgrade()));
         cx.set_global(UiState { sidebar_open: true, ..Default::default() });
         cx.set_global(OpenMenu::default());
+        crate::downloads::load_history(cx);
         cx.set_global(AutoplayNext::default());
         cx.set_global(crate::ui::cards::Watched(store::progress_map()));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search or paste a YouTube link"));
@@ -317,6 +326,40 @@ impl AppView {
                 crate::save_window_bounds(window);
             }
         }));
+        // "Background play" off: pause when the window is minimized, resume when restored
+        // a hold-for-2x can't outlive the window losing focus (the key/button release goes elsewhere)
+        subs.push(cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+            if !window.is_window_active() {
+                this.space_down = false;
+                player(cx).update(cx, |p, cx| {
+                    p.end_boost();
+                    cx.notify();
+                });
+            }
+        }));
+        subs.push(window.observe_window_visibility({
+            let paused_by_us = std::rc::Rc::new(std::cell::Cell::new(false));
+            move |vis, window, cx| {
+                let pl = player(cx);
+                if !vis.is_visible() {
+                    if store::settings_snapshot().background_play || crate::ui::pip::handle(cx).is_some() || !window_minimized(window) {
+                        return;
+                    }
+                    if !pl.read(cx).paused && pl.read(cx).video.is_some() {
+                        pl.update(cx, |p, cx| {
+                            p.set_paused(true);
+                            cx.notify();
+                        });
+                        paused_by_us.set(true);
+                    }
+                } else if paused_by_us.replace(false) {
+                    pl.update(cx, |p, cx| {
+                        p.set_paused(false);
+                        cx.notify();
+                    });
+                }
+            }
+        }));
         subs.push(cx.observe_window_appearance(window, |_, window, cx| {
             if store::settings_snapshot().theme == "system" {
                 apply_theme(Some(window), cx);
@@ -330,10 +373,19 @@ impl AppView {
         let main_view = cx.new(|cx| PlayerView::new(p.clone(), false, cx));
         cx.set_global(crate::ui::slot::PlayerSlot::default());
         // a YouTube link passed on the command line opens directly
-        let arg_route = std::env::args().nth(1).and_then(|a| innertube::parse_youtube_url(&a)).map(|r| match r {
-            innertube::ResolvedUrl::Video(id) => Route::Watch { id, playlist: None, start: None },
-            innertube::ResolvedUrl::Channel(id) => Route::Channel(id),
-            innertube::ResolvedUrl::Playlist(id) => Route::Playlist(id),
+        let arg = std::env::args().nth(1).unwrap_or_default();
+        let search_arg = arg
+            .contains("/results?")
+            .then(|| arg.split(['?', '&']).find_map(|kv| kv.strip_prefix("search_query=")))
+            .flatten()
+            .map(|q| crate::api::http::urldecode(&q.replace('+', " ")))
+            .filter(|q| !q.trim().is_empty());
+        let arg_route = search_arg.map(Route::Search).or_else(|| {
+            innertube::parse_youtube_url(&arg).map(|r| match r {
+                innertube::ResolvedUrl::Video(id) => Route::Watch { id, playlist: None, start: None },
+                innertube::ResolvedUrl::Channel(id) => Route::Channel(id),
+                innertube::ResolvedUrl::Playlist(id) => Route::Playlist(id),
+            })
         });
         let start = arg_route.unwrap_or_else(|| match store::settings_snapshot().start_page.as_str() {
             "subscriptions" => Route::Subscriptions,
@@ -341,8 +393,27 @@ impl AppView {
             _ => Route::Home,
         });
         let page = build_page(&start, window, cx);
+        if let Route::Search(q) = &start {
+            let q = q.clone();
+            search.update(cx, |st, cx| st.set_value(q, window, cx));
+        }
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        // keep the local subscription list (sidebar, local feed) in step with the
+        // account: immediately when it's empty, otherwise once a day
+        if crate::api::auth::signed_in() {
+            let last = store::kv_get("subs_synced_at").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            if store::subscriptions().is_empty() || crate::api::json::now() - last > 24 * 3600 {
+                cx.spawn(async move |this, cx| {
+                    let res = blocking(crate::api::auth::sync_subscriptions).await;
+                    if res.is_ok() {
+                        store::kv_set("subs_synced_at", &crate::api::json::now().to_string());
+                    }
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+        }
         Self {
             route: start,
             page,
@@ -364,6 +435,10 @@ impl AppView {
             pending_watch_sync: None,
             login: LoginFlow::default(),
             reload_page: false,
+            drawer_open: false,
+            subs_expanded: false,
+            dl_panel: false,
+            space_down: false,
             _subs: subs,
         }
     }
@@ -600,8 +675,32 @@ impl AppView {
                     Some(h) => format!("{}  ·  {}", acc.name, h),
                     None => acc.name.clone(),
                 };
+                let handle = acc.handle.clone();
                 let items = vec![
                     MenuItem::new("circle-user", label, |_, _| {}),
+                    MenuItem::new("square-user", "Your channel", move |_, cx| {
+                        let Some(h) = handle.clone() else {
+                            toast(cx, "Channel handle unknown");
+                            return;
+                        };
+                        let url = format!("https://www.youtube.com/{}", if h.starts_with('@') { h } else { format!("@{h}") });
+                        cx.spawn(async move |cx| {
+                            let res = blocking(move || innertube::resolve_url(&url)).await;
+                            let _ = cx.update(|cx| match res {
+                                Ok(innertube::ResolvedUrl::Channel(id)) => {
+                                    if let Some(w) = cx.active_window() {
+                                        let _ = w.update(cx, |_, window, cx| navigate(Route::Channel(id), window, cx));
+                                    }
+                                }
+                                _ => toast(cx, "Could not open your channel"),
+                            });
+                        })
+                        .detach();
+                    }),
+                    MenuItem::new("history", "History", |window, cx| navigate(Route::History, window, cx)),
+                    MenuItem::new("list-video", "Playlists", |window, cx| navigate(Route::Library, window, cx)),
+                    MenuItem::new("download", "Downloads", |window, cx| navigate(Route::Downloads, window, cx)),
+                    MenuItem::new("settings", "Settings", |window, cx| navigate(Route::Settings, window, cx)),
                     MenuItem::new("refresh-cw", "Sync subscriptions", |_, cx| {
                         cx.spawn(async move |cx| {
                             let res = blocking(crate::api::auth::sync_subscriptions).await;
@@ -615,6 +714,12 @@ impl AppView {
                             });
                         })
                         .detach();
+                    }),
+                    MenuItem::new("users", "Switch account", |_, cx| {
+                        sign_out(cx);
+                        if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
+                            app.update(cx, |a, cx| a.start_sign_in(cx));
+                        }
                     }),
                     MenuItem::new("log-out", "Sign out", |_, cx| sign_out(cx)),
                 ];
@@ -630,6 +735,7 @@ impl AppView {
             _ => {}
         }
         cx.set_global(OpenMenu(None));
+        self.drawer_open = false;
         if route == self.route {
             // re-navigating to the same place refreshes it (like clicking Home again)
             if !matches!(route, Route::Watch { .. }) {
@@ -762,13 +868,321 @@ impl AppView {
         self.go(Route::Search(q), window, cx);
     }
 
+    /// Reloads the current page (the watch page keeps the player going).
+    pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.set_global(OpenMenu(None));
+        if let Route::Watch { id, playlist, .. } = self.route.clone() {
+            let t = player(cx).read(cx).time;
+            self.route = Route::Watch { id, playlist, start: Some(t) };
+        }
+        self.page = build_page(&self.route, window, cx);
+        cx.notify();
+    }
+
+    fn render_dl_button(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let (active, prog) = crate::downloads::summary(cx);
+        let open = self.dl_panel;
+        let mut btn = div()
+            .id("dl")
+            .relative()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size_10()
+            .rounded_full()
+            .cursor_pointer()
+            .when(open, |d| d.bg(p.hover))
+            .hover(move |s| s.bg(p.hover))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.dl_panel ^= true;
+                cx.notify();
+            }));
+        if active > 0 {
+            btn = btn
+                .child(
+                    icon("arrow-down-to-line").size_5().text_color(p.accent).with_animation(
+                        "dl-bob",
+                        Animation::new(std::time::Duration::from_millis(1100)).repeat().with_easing(pulsating_between(0.35, 1.0)),
+                        |svg, d| svg.opacity(d),
+                    ),
+                )
+                // progress track under the icon
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(9.))
+                        .right(px(9.))
+                        .bottom(px(5.))
+                        .h(px(3.))
+                        .rounded_full()
+                        .bg(p.border)
+                        .child(div().h_full().rounded_full().bg(p.accent).w(relative(prog.clamp(0.04, 1.0)))),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(1.))
+                        .right(px(0.))
+                        .min_w(px(16.))
+                        .h(px(16.))
+                        .px(px(4.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(p.accent)
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(white())
+                        .child(active.to_string())
+                        .with_animation(
+                            SharedString::from(format!("dl-badge-{active}")),
+                            Animation::new(std::time::Duration::from_millis(350)).with_easing(ease_out_quint()),
+                            |d, t| d.opacity(t),
+                        ),
+                );
+        } else {
+            btn = btn.child(icon("download").text_color(p.text));
+        }
+        btn.into_any_element()
+    }
+
+    fn render_dl_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.dl_panel {
+            return None;
+        }
+        use crate::downloads::{self, JobStatus};
+        let p = pal(cx);
+        let mut jobs = cx.default_global::<downloads::Downloads>().jobs.lock().clone();
+        jobs.reverse();
+        let small_btn = |id: SharedString, ic: &'static str, tip: &'static str| {
+            let _ = tip;
+            div()
+                .id(id)
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size_7()
+                .rounded_full()
+                .cursor_pointer()
+                .hover(move |s| s.bg(p.hover))
+                .child(icon(ic).size_4().text_color(p.text2))
+        };
+        let mut list = div().id("dlp-list").flex().flex_col().max_h(px(420.)).overflow_y_scroll().py_1();
+        if jobs.is_empty() {
+            list = list.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_2()
+                    .py_8()
+                    .child(icon("download").size_8().text_color(p.text3))
+                    .child(div().text_sm().text_color(p.text2).child("No downloads yet")),
+            );
+        }
+        for j in jobs.iter().take(50) {
+            let id = j.id;
+            let title = if j.video.title.is_empty() { j.video.id.clone() } else { j.video.title.clone() };
+            let (line, color, running) = match &j.status {
+                JobStatus::Queued => ("Waiting…".to_string(), p.text2, true),
+                JobStatus::Running => (format!("{:.0}%  {}", j.progress * 100.0, j.detail.split("at").nth(1).map(|s| format!("· {}", s.trim())).unwrap_or_default()), p.text2, true),
+                JobStatus::Done(path) => (
+                    std::fs::metadata(path).map(|m| format!("{:.1} MB · {}", m.len() as f64 / 1e6, j.format)).unwrap_or_else(|_| "File missing".into()),
+                    p.text2,
+                    false,
+                ),
+                JobStatus::Failed(e) => (format!("Failed: {e}"), rgb(0xff4e45).into(), false),
+                JobStatus::Cancelled => ("Cancelled".into(), p.text2, false),
+            };
+            let done_path = if let JobStatus::Done(pth) = &j.status { Some(pth.clone()) } else { None };
+            let open_path = done_path.clone();
+            let mut row = div()
+                .id(SharedString::from(format!("dlp-{id}")))
+                .flex()
+                .items_center()
+                .gap_3()
+                .px_3()
+                .py_2()
+                .mx_1()
+                .rounded_lg()
+                .hover(move |s| s.bg(p.hover))
+                .when(open_path.is_some(), |d| d.cursor_pointer())
+                .on_click(move |_, _, cx| {
+                    if let Some(pth) = &open_path {
+                        downloads::open_file(pth, cx);
+                    }
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(72.))
+                        .h(px(40.))
+                        .rounded_md()
+                        .overflow_hidden()
+                        .bg(p.chip)
+                        .child(img(j.video.thumbnail.clone()).size_full().object_fit(ObjectFit::Cover)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_0p5()
+                        .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.text).truncate().child(title))
+                        .child(div().text_xs().text_color(color).truncate().child(line))
+                        .when(running, |d| {
+                            d.child(
+                                div()
+                                    .mt_1()
+                                    .h(px(3.))
+                                    .w_full()
+                                    .rounded_full()
+                                    .bg(p.border)
+                                    .child(div().h_full().rounded_full().bg(p.accent).w(relative(j.progress.clamp(0.02, 1.0)))),
+                            )
+                        }),
+                );
+            if running {
+                row = row.child(small_btn(SharedString::from(format!("dlp-c-{id}")), "x", "Cancel").on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    downloads::cancel(id, cx)
+                }));
+            } else {
+                if let Some(pth) = done_path.clone() {
+                    row = row.child(small_btn(SharedString::from(format!("dlp-f-{id}")), "folder-open", "Show in folder").on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        reveal_in_folder(&pth, cx);
+                    }));
+                    row = row.child(small_btn(SharedString::from(format!("dlp-d-{id}")), "trash-2", "Delete file").on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        downloads::delete_file(id, cx)
+                    }));
+                }
+                row = row.child(small_btn(SharedString::from(format!("dlp-r-{id}")), "x", "Remove from list").on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    downloads::remove(id, cx)
+                }));
+            }
+            list = list.child(row);
+        }
+        let footer_btn = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1p5()
+                .rounded_full()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(p.link)
+                .cursor_pointer()
+                .hover(move |s| s.bg(p.hover))
+                .child(label)
+        };
+        let has_finished = jobs.iter().any(|j| !matches!(j.status, JobStatus::Running | JobStatus::Queued));
+        Some(
+            deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(
+                        div().id("dlp-scrim").absolute().inset_0().occlude().on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.dl_panel = false;
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .id("dlp")
+                            .occlude()
+                            .absolute()
+                            .top(px(52.))
+                            .right(px(150.))
+                            .w(px(400.))
+                            .rounded_xl()
+                            .bg(p.surface2)
+                            .border_1()
+                            .border_color(p.border)
+                            .shadow_2xl()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px_4()
+                                    .pt_3()
+                                    .pb_2()
+                                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Downloads"))
+                                    .when(has_finished, |d| {
+                                        d.child(footer_btn("dlp-clear", "Clear list").on_click(|_, _, cx| downloads::clear_history(cx)))
+                                    }),
+                            )
+                            .child(list)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px_2()
+                                    .py_2()
+                                    .border_t_1()
+                                    .border_color(p.border)
+                                    .child(footer_btn("dlp-folder", "Open folder").on_click(|_, _, _| {
+                                        let d = store::settings_snapshot().download_dir.clone();
+                                        let _ = std::fs::create_dir_all(&d);
+                                        let _ = open::that(d);
+                                    }))
+                                    .child(footer_btn("dlp-page", "Open downloads page").on_click(cx.listener(|this, _, window, cx| {
+                                        this.dl_panel = false;
+                                        this.go(Route::Downloads, window, cx)
+                                    }))),
+                            ),
+                    ),
+            )
+            .with_priority(3)
+            .into_any_element(),
+        )
+    }
+
     // ───── keyboard ─────
+
+    fn on_key_up(&mut self, ev: &KeyUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if ev.keystroke.key != "space" || !std::mem::take(&mut self.space_down) {
+            return;
+        }
+        player(cx).update(cx, |pl, cx| {
+            if pl.boost.is_some() {
+                pl.end_boost();
+            } else {
+                pl.toggle_pause();
+            }
+            cx.notify();
+        });
+    }
 
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let search_focused = self.search.read(cx).focus_handle(cx).is_focused(window);
         let dialog_focused = self.dialog_input.read(cx).focus_handle(cx).is_focused(window);
         let k = ev.keystroke.key.as_str();
         let m = &ev.keystroke.modifiers;
+        if k == "f5" || (m.control && k == "r" && !search_focused && !dialog_focused) {
+            self.refresh(window, cx);
+            return;
+        }
+        if k == "escape" && self.dl_panel {
+            self.dl_panel = false;
+            cx.notify();
+            return;
+        }
         if k == "escape" {
             if self.dialog.is_some() {
                 self.dialog = None;
@@ -830,14 +1244,30 @@ impl AppView {
                 }
             }
         }
+        // typing in a text field (chat, filters, channel search...) isn't a shortcut
+        if window.focused(cx).map(|f| f != self.focus).unwrap_or(false) {
+            return;
+        }
         let p = player(cx);
         if p.read(cx).video.is_none() {
             return;
         }
         let step = store::settings_snapshot().seek_step;
+        let held = ev.is_held;
+        if k == "space" {
+            self.space_down = true;
+        }
         let handled = p.update(cx, |pl: &mut Player, cx| {
             let handled = match (k, m.shift) {
-                ("space", _) | ("k", false) => {
+                ("space", _) => {
+                    // acted on at release (tap) or while held (2x)
+                    if held {
+                        pl.start_boost();
+                        cx.notify();
+                    }
+                    true
+                }
+                ("k", false) => {
                     pl.toggle_pause();
                     true
                 }
@@ -981,15 +1411,20 @@ impl AppView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(icon_button("menu", "menu", cx).on_click(|_, _, cx| {
-                        cx.global_mut::<UiState>().sidebar_open ^= true;
+                    .child(icon_button("menu", "menu", cx).on_click(cx.listener(|this, _, _, cx| {
+                        if matches!(this.route, Route::Watch { .. }) {
+                            this.drawer_open ^= true;
+                        } else {
+                            cx.global_mut::<UiState>().sidebar_open ^= true;
+                        }
                         cx.refresh_windows();
-                    }))
+                    })))
                     .child(
                         icon_button("back", "arrow-left", cx)
                             .when(!can_back, |d| d.opacity(0.35))
                             .on_click(cx.listener(|this, _, window, cx| this.back(window, cx))),
                     )
+                    .child(icon_button("refresh", "rotate-cw", cx).on_click(cx.listener(|this, _, window, cx| this.refresh(window, cx))))
                     .child(
                         div()
                             .id("logo")
@@ -1109,7 +1544,7 @@ impl AppView {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(icon_button("dl", "download", cx).on_click(cx.listener(|this, _, window, cx| this.go(Route::Downloads, window, cx))))
+                    .child(self.render_dl_button(cx))
                     .child(icon_button("settings", "settings", cx).on_click(cx.listener(|this, _, window, cx| this.go(Route::Settings, window, cx))))
                     .child(self.account_button(cx))
                     .child(div().id("drag-c").w_3().h(px(56.)).window_control_area(WindowControlArea::Drag))
@@ -1122,42 +1557,23 @@ impl AppView {
         let ui = *cx.global::<UiState>();
         let route = self.route.clone();
         let is_watch = matches!(route, Route::Watch { .. });
-        if is_watch && !ui.sidebar_open {
-            return div().into_any_element();
-        }
-        let entry = |id: &'static str, ic: &'static str, label: &str, r: Route, active: bool, cx: &mut Context<Self>| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .gap_6()
-                .px_3()
-                .h_10()
-                .rounded_lg()
-                .cursor_pointer()
-                .text_sm()
-                .text_color(p.text)
-                .when(active, |d| d.bg(p.chip).font_weight(FontWeight::MEDIUM))
-                .hover(move |s| s.bg(p.hover))
-                .child(icon(ic).text_color(p.text))
-                .child(label.to_string())
-                .on_click(cx.listener(move |this, _, window, cx| this.go(r.clone(), window, cx)))
-        };
-        if !ui.sidebar_open {
+        let s = store::settings_snapshot();
+        if !ui.sidebar_open && !is_watch {
             // compact rail
-            let rail = |id: &'static str, ic: &'static str, label: &'static str, r: Route, cx: &mut Context<Self>| {
+            let rail = |id: &'static str, ic: &'static str, label: &'static str, r: Route, active: bool, cx: &mut Context<Self>| {
                 div()
                     .id(id)
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap_1()
-                    .py_4()
+                    .gap_1p5()
+                    .py_3p5()
                     .w(px(64.))
-                    .rounded_lg()
+                    .rounded_xl()
                     .cursor_pointer()
+                    .when(active, |d| d.bg(p.chip))
                     .hover(move |s| s.bg(p.hover))
-                    .child(icon(ic).text_color(p.text))
+                    .child(icon(ic).size_5().text_color(p.text))
                     .child(div().text_size(px(10.)).text_color(p.text).child(label))
                     .on_click(cx.listener(move |this, _, window, cx| this.go(r.clone(), window, cx)))
             };
@@ -1165,137 +1581,198 @@ impl AppView {
                 .flex()
                 .flex_col()
                 .flex_none()
+                .gap_1()
                 .w(px(72.))
                 .px_1()
-                .child(rail("r-home", "house", "Home", Route::Home, cx))
-                .child(rail("r-shorts", "zap", "Shorts", Route::Shorts(None), cx))
-                .child(rail("r-subs", "tv", "Subscriptions", Route::Subscriptions, cx))
-                .child(rail("r-you", "library", "You", Route::Library, cx))
+                .pt_1()
+                .child(rail("r-home", "house", "Home", Route::Home, route == Route::Home, cx))
+                .when(!s.hide_shorts, |d| d.child(rail("r-shorts", "zap", "Shorts", Route::Shorts(None), matches!(route, Route::Shorts(_)), cx)))
+                .child(rail("r-subs", "tv", "Subscriptions", Route::Subscriptions, route == Route::Subscriptions, cx))
+                .child(rail("r-you", "circle-user", "You", Route::Library, route == Route::Library, cx))
+                .child(rail("r-dl", "download", "Downloads", Route::Downloads, route == Route::Downloads, cx))
                 .into_any_element();
         }
-        let s = store::settings_snapshot();
-        let subs = store::subscriptions();
-        let section = |title: &str| {
+        // one row: icon (or avatar) + label, YouTube-like density
+        let row = |id: SharedString, lead: AnyElement, label: String, active: bool| {
             div()
+                .id(id)
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_5()
                 .px_3()
-                .pt_4()
+                .h(px(38.))
+                .rounded_lg()
+                .cursor_pointer()
+                .text_sm()
+                .text_color(p.text)
+                .when(active, |d| d.bg(p.chip).font_weight(FontWeight::MEDIUM))
+                .hover(move |s| s.bg(p.hover))
+                .child(div().flex().flex_none().items_center().justify_center().size(px(24.)).child(lead))
+                .child(div().flex_1().min_w_0().truncate().child(label))
+        };
+        let ic = |name: &str, active: bool| -> AnyElement {
+            let _ = active;
+            icon(name).size_5().text_color(p.text).into_any_element()
+        };
+        let entry = |id: &'static str, name: &'static str, label: &str, r: Route, active: bool, cx: &mut Context<Self>| {
+            row(id.into(), ic(name, active), label.to_string(), active)
+                .on_click(cx.listener(move |this, _, window, cx| this.go(r.clone(), window, cx)))
+        };
+        let heading = |title: &str| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_3()
+                .pt_1()
                 .pb_1()
-                .text_base()
+                .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(p.text)
                 .child(title.to_string())
         };
-        let sep = || div().my_3().h(px(1.)).bg(p.border);
+        let sep = || div().flex_none().mx_3().my_3().h(px(1.)).bg(p.border);
+
         let mut col = div()
             .id("sidebar")
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(240.))
+            .w(px(232.))
             .h_full()
-            .px_3()
-            .pb_6()
+            .px_2()
+            .pt_1()
+            .pb_4()
             .overflow_y_scroll()
             .child(entry("s-home", "house", "Home", Route::Home, route == Route::Home, cx))
             .when(!s.hide_shorts, |d| d.child(entry("s-shorts", "zap", "Shorts", Route::Shorts(None), matches!(route, Route::Shorts(_)), cx)))
             .child(entry("s-subs", "tv", "Subscriptions", Route::Subscriptions, route == Route::Subscriptions, cx))
             .child(sep())
-            .child(section("You"))
+            .child(
+                heading("You").id("s-you").cursor_pointer().rounded_lg().h(px(38.)).hover(move |s| s.bg(p.hover)).child(icon("chevron-right").size_4().text_color(p.text)).on_click(
+                    cx.listener(|this, _, window, cx| this.go(Route::Library, window, cx)),
+                ),
+            )
             .child(entry("s-hist", "history", "History", Route::History, route == Route::History, cx))
             .child(entry("s-pl", "list-video", "Playlists", Route::Library, route == Route::Library, cx));
-        // built-in playlists quick links
         for pl in store::playlists().into_iter().filter(|p| p.protected) {
-            let ic = if pl.name == "Watch later" { "clock" } else { "heart" };
+            let name = if pl.name == "Watch later" { "clock" } else { "thumbs-up" };
             let active = route == Route::LocalPlaylist(pl.id);
             let id = pl.id;
             col = col.child(
-                div()
-                    .id(SharedString::from(format!("s-lp-{id}")))
-                    .flex()
-                    .items_center()
-                    .gap_6()
-                    .px_3()
-                    .h_10()
-                    .rounded_lg()
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(p.text)
-                    .when(active, |d| d.bg(p.chip))
-                    .hover(move |s| s.bg(p.hover))
-                    .child(icon(ic).text_color(p.text))
-                    .child(pl.name.clone())
+                row(SharedString::from(format!("s-lp-{id}")), ic(name, active), pl.name.clone(), active)
                     .on_click(cx.listener(move |this, _, window, cx| this.go(Route::LocalPlaylist(id), window, cx))),
             );
         }
-        col = col
-            .child(entry("s-dl", "download", "Downloads", Route::Downloads, route == Route::Downloads, cx))
-            .child(sep())
-            .child(
+        col = col.child(entry("s-dl", "download", "Downloads", Route::Downloads, route == Route::Downloads, cx));
+
+        let subs = store::subscriptions();
+        if !subs.is_empty() {
+            const SHOWN: usize = 7;
+            col = col.child(sep()).child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(section("Subscriptions"))
+                    .pr_1()
+                    .child(heading("Subscriptions"))
                     .child(
                         div()
                             .id("s-manage")
-                            .mt_3()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
                             .text_xs()
-                            .text_color(p.link)
+                            .text_color(p.text2)
                             .cursor_pointer()
+                            .hover(move |s| s.bg(p.hover).text_color(p.text))
                             .child("Manage")
                             .on_click(cx.listener(|this, _, window, cx| this.go(Route::Channels, window, cx))),
                     ),
             );
-        for sub in subs.iter().take(60) {
-            let cid = sub.channel_id.clone();
-            let active = route == Route::Channel(cid.clone());
-            col = col.child(
-                div()
-                    .id(SharedString::from(format!("s-sub-{}", sub.channel_id)))
-                    .flex()
-                    .items_center()
-                    .gap_4()
-                    .px_3()
-                    .h_10()
-                    .rounded_lg()
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(p.text)
-                    .when(active, |d| d.bg(p.chip))
-                    .hover(move |s| s.bg(p.hover))
-                    .child(avatar(sub.avatar.as_deref(), px(24.), &sub.name, cx))
-                    .child(div().flex_1().truncate().child(sub.name.clone()))
-                    .on_click(cx.listener(move |this, _, window, cx| this.go(Route::Channel(cid.clone()), window, cx))),
-            );
+            let n = if self.subs_expanded { subs.len() } else { subs.len().min(SHOWN) };
+            for sub in subs.iter().take(n) {
+                let cid = sub.channel_id.clone();
+                let active = route == Route::Channel(cid.clone());
+                col = col.child(
+                    row(SharedString::from(format!("s-sub-{}", sub.channel_id)), avatar(sub.avatar.as_deref(), px(24.), &sub.name, cx), sub.name.clone(), active)
+                        .on_click(cx.listener(move |this, _, window, cx| this.go(Route::Channel(cid.clone()), window, cx))),
+                );
+            }
+            if subs.len() > SHOWN {
+                let expanded = self.subs_expanded;
+                col = col.child(
+                    row(
+                        "s-subs-more".into(),
+                        icon(if expanded { "chevron-up" } else { "chevron-down" }).size_5().text_color(p.text).into_any_element(),
+                        if expanded { "Show fewer".into() } else { format!("Show {} more", subs.len() - SHOWN) },
+                        false,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.subs_expanded ^= true;
+                        cx.notify();
+                    })),
+                );
+            }
         }
         if !s.hide_explore {
-            col = col.child(sep()).child(section("Explore"));
+            col = col.child(sep()).child(heading("Explore"));
             let icons = ["music", "gamepad-2", "newspaper", "trophy", "radio", "shirt", "lightbulb"];
             for (i, (name, _)) in innertube::EXPLORE.iter().enumerate() {
                 let active = route == Route::Explore(i);
                 col = col.child(
-                    div()
-                        .id(SharedString::from(format!("s-ex-{i}")))
-                        .flex()
-                        .items_center()
-                        .gap_6()
-                        .px_3()
-                        .h_10()
-                        .rounded_lg()
-                        .cursor_pointer()
-                        .text_sm()
-                        .text_color(p.text)
-                        .when(active, |d| d.bg(p.chip))
-                        .hover(move |s| s.bg(p.hover))
-                        .child(icon(icons.get(i).copied().unwrap_or("compass")).text_color(p.text))
-                        .child(name.to_string())
+                    row(SharedString::from(format!("s-ex-{i}")), ic(icons.get(i).copied().unwrap_or("compass"), active), name.to_string(), active)
                         .on_click(cx.listener(move |this, _, window, cx| this.go(Route::Explore(i), window, cx))),
                 );
             }
         }
-        col = col.child(sep()).child(entry("s-set", "settings", "Settings", Route::Settings, route == Route::Settings, cx));
+        col = col
+            .child(sep())
+            .child(entry("s-set", "settings", "Settings", Route::Settings, route == Route::Settings, cx));
         col.into_any_element()
+    }
+
+    /// The sidebar as a slide-over on the watch page.
+    fn render_drawer(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.drawer_open || !matches!(self.route, Route::Watch { .. }) {
+            return None;
+        }
+        let p = pal(cx);
+        let side = self.render_sidebar(cx);
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .top(px(56.))
+                .flex()
+                .child(
+                    div()
+                        .id("drawer")
+                        .h_full()
+                        .bg(p.bg)
+                        .border_r_1()
+                        .border_color(p.border)
+                        .shadow_2xl()
+                        .occlude()
+                        .child(side),
+                )
+                .child(
+                    div()
+                        .id("drawer-scrim")
+                        .flex_1()
+                        .h_full()
+                        .bg(hsla(0., 0., 0., 0.45))
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.drawer_open = false;
+                            cx.notify();
+                        })),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_mini_player(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1572,6 +2049,20 @@ impl AppView {
                                 }),
                         )
                     })
+                    .children(t.extra.clone().into_iter().enumerate().map(|(i, (label, f))| {
+                        let id = t.id;
+                        div()
+                            .id(SharedString::from(format!("toast-{id}-{i}")))
+                            .text_color(rgb(0x3ea6ff))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .child(label)
+                            .on_click(move |_, window, cx| {
+                                f(window, cx);
+                                cx.default_global::<Toasts>().items.retain(|x| x.id != id);
+                                cx.refresh_windows();
+                            })
+                    }))
             }))
     }
 }
@@ -1607,7 +2098,7 @@ impl Render for AppView {
         let sidebar_w = if is_watch {
             0.0
         } else if ui.sidebar_open {
-            240.0
+            232.0
         } else {
             72.0
         };
@@ -1629,6 +2120,7 @@ impl Render for AppView {
             .text_color(p.text)
             .font_family(".SystemUIFont")
             .on_key_down(cx.listener(Self::on_key))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_mouse_down(
                 MouseButton::Navigate(NavigationDirection::Back),
                 cx.listener(|this, _, window, cx| this.back(window, cx)),
@@ -1660,11 +2152,10 @@ impl Render for AppView {
                     .children(sidebar)
                     .child(page_area.flex_1().min_w_0().h_full()),
             );
-            if is_watch && ui.sidebar_open && cx.global::<UiState>().sidebar_open {
-                // drawer is closed by default on the watch page
-            }
             root = root.children(self.render_mini_player(cx));
+            root = root.children(self.render_drawer(cx));
         }
+        root = root.children(self.render_dl_panel(cx));
         root = root.children(self.render_menu(cx)).children(self.render_dialog(cx)).child(self.render_toasts(cx));
         root
     }
@@ -1758,5 +2249,65 @@ fn build_page(route: &Route, window: &mut Window, cx: &mut App) -> AnyView {
         }
         Route::Settings => cx.new(|cx| settings::SettingsPage::new(window, cx)).into(),
         Route::Downloads => cx.new(|cx| downloads::DownloadsPage::new(window, cx)).into(),
+    }
+}
+
+/// Shows a file selected in the system file manager.
+pub fn reveal_in_folder(path: &str, cx: &mut App) {
+    if !std::path::Path::new(path).exists() {
+        toast(cx, "File not found (moved or deleted)");
+        return;
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(d) = std::path::Path::new(path).parent() {
+            let _ = open::that(d);
+        }
+    }
+}
+
+/// Redraws every built page (current, back and forward history). Pages are cached
+/// views, so a settings change (density, corners, columns, accent...) only shows
+/// after their entities are notified.
+pub fn refresh_all_pages(cx: &mut App) {
+    let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) else { return };
+    let ids: Vec<EntityId> = {
+        let a = app.read(cx);
+        std::iter::once(a.page.entity_id())
+            .chain(a.history.iter().map(|(_, v)| v.entity_id()))
+            .chain(a.forward.iter().map(|(_, v)| v.entity_id()))
+            .collect()
+    };
+    for id in ids {
+        cx.notify(id);
+    }
+    app.update(cx, |_, cx| cx.notify());
+    cx.refresh_windows();
+}
+
+/// True when the window is minimized (iconic). Elsewhere a hidden window counts as minimized.
+fn window_minimized(window: &Window) -> bool {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn IsIconic(hwnd: isize) -> i32;
+        }
+        if let Ok(h) = HasWindowHandle::window_handle(window) {
+            if let RawWindowHandle::Win32(w) = h.as_raw() {
+                return unsafe { IsIconic(w.hwnd.get()) } != 0;
+            }
+        }
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        true
     }
 }

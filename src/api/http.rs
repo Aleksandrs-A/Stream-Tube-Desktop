@@ -13,6 +13,7 @@ fn agent() -> &'static ureq::Agent {
         let mut b = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
+            .ip_family(crate::store::ip_family())
             .user_agent(BROWSER_UA);
         if let Some(p) = crate::store::proxy_setting() {
             if let Ok(proxy) = ureq::Proxy::new(&p) {
@@ -132,4 +133,29 @@ pub fn urlencode(s: &str) -> String {
         }
     }
     o
+}
+
+/// Decodes %XX escapes and '+' (query strings).
+pub fn urldecode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => {
+                match u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16) {
+                    Ok(v) => {
+                        out.push(v);
+                        i += 3;
+                        continue;
+                    }
+                    Err(_) => out.push(b'%'),
+                }
+            }
+            b'+' => out.push(b' '),
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }

@@ -5,6 +5,7 @@ mod perf;
 mod downloads;
 mod feed;
 mod import;
+mod locale;
 mod player;
 mod store;
 mod ui;

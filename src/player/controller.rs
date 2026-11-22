@@ -4,7 +4,7 @@ use crate::api::services::{self, Segment};
 use crate::api::streams;
 use crate::api::types::*;
 use crate::store;
-use crate::ui::{blocking, toast, toast_with_action};
+use crate::ui::{blocking, toast};
 use gpui_kit::*;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -17,6 +17,8 @@ pub enum PlayerEvent {
 }
 
 pub struct Player {
+    /// speed to go back to while a press-and-hold plays at 2x
+    pub boost: Option<f64>,
     mpv: Option<Arc<Mpv>>,
     pub init_error: Option<String>,
     pub video: Option<VideoItem>,
@@ -115,6 +117,7 @@ impl Player {
             volume: s.volume,
             muted: false,
             speed: s.default_speed,
+            boost: None,
             eof: false,
             frame: None,
             old_frames: Vec::new(),
@@ -409,18 +412,34 @@ impl Player {
                     std::thread::spawn(move || services::sponsor_viewed(&server, &uuid));
                     if s.sb_notify {
                         let weak = cx.entity().downgrade();
-                        toast_with_action(
-                            cx,
-                            format!("Skipped {}", services::sponsor_category_name(&seg.category)),
-                            Some((
-                                "Unskip".into(),
-                                Arc::new(move |_, cx: &mut App| {
-                                    if let Some(p) = weak.upgrade() {
-                                        p.update(cx, |p, _| p.seek_to(back_to));
-                                    }
-                                }),
-                            )),
-                        );
+                        let mut actions: Vec<(SharedString, Arc<dyn Fn(&mut Window, &mut App)>)> = vec![(
+                            "Unskip".into(),
+                            Arc::new(move |_, cx: &mut App| {
+                                if let Some(p) = weak.upgrade() {
+                                    p.update(cx, |p, _| p.seek_to(back_to));
+                                }
+                            }),
+                        )];
+                        if !s.sb_user_id.is_empty() {
+                            for (label, up) in [("Upvote", true), ("Downvote", false)] {
+                                let (server, uuid, user) = (s.sponsorblock_server.clone(), seg.uuid.clone(), s.sb_user_id.clone());
+                                actions.push((
+                                    label.into(),
+                                    Arc::new(move |_, cx: &mut App| {
+                                        let (server, uuid, user) = (server.clone(), uuid.clone(), user.clone());
+                                        cx.spawn(async move |cx| {
+                                            let res = crate::ui::blocking(move || services::sponsor_vote(&server, &uuid, &user, up)).await;
+                                            let _ = cx.update(|cx| match res {
+                                                Ok(()) => toast(cx, "Thanks for voting"),
+                                                Err(e) => toast(cx, format!("Vote failed: {e}")),
+                                            });
+                                        })
+                                        .detach();
+                                    }),
+                                ));
+                            }
+                        }
+                        crate::ui::toast_with_actions(cx, format!("Skipped {}", services::sponsor_category_name(&seg.category)), actions);
                     }
                 }
                 "ask" => prompt = Some(seg.clone()),
@@ -610,7 +629,10 @@ impl Player {
     fn load_current(&mut self, start: Option<f64>, keep_pause: bool, cx: &mut Context<Self>) {
         let (Some(mpv), Some(info)) = (self.mpv.clone(), self.streams.clone()) else { return };
         let s = store::settings_snapshot();
-        let src = if info.is_live || (info.video.is_empty() && info.muxed.is_empty()) {
+        let src = if info.hls_only {
+            let audio = streams::hls_audio_choice(&info, self.audio_track.as_deref());
+            info.hls_url.as_deref().map(|u| crate::player::proxy::local_hls(u, self.quality, audio.as_deref()))
+        } else if info.is_live || (info.video.is_empty() && info.muxed.is_empty()) {
             info.hls_url.clone()
         } else {
             let (v, a) = streams::pick_formats(&info, self.quality, &s.codec_pref, self.audio_track.as_deref());
@@ -850,6 +872,28 @@ impl Player {
         self.muted = !self.muted;
         if let Some(m) = &self.mpv {
             m.set_flag("mute", self.muted);
+        }
+    }
+
+    /// Press-and-hold: plays at 2x until `end_boost`, without touching the saved speed.
+    pub fn start_boost(&mut self) {
+        if self.boost.is_some() || self.video.is_none() {
+            return;
+        }
+        self.boost = Some(self.speed);
+        if self.paused {
+            self.set_paused(false);
+        }
+        if let Some(m) = &self.mpv {
+            m.set_f64("speed", (self.speed * 2.0).clamp(2.0, 4.0));
+        }
+    }
+
+    pub fn end_boost(&mut self) {
+        if let Some(prev) = self.boost.take() {
+            if let Some(m) = &self.mpv {
+                m.set_f64("speed", prev);
+            }
         }
     }
 

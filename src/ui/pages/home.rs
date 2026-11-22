@@ -8,6 +8,26 @@ use crate::ui::*;
 /// Marks continuations of the signed-in home feed (they need the TV client).
 const ACCOUNT: &str = "acct:";
 
+/// Videos at the top of the last home load. A refresh moves them down so it
+/// actually shows something new (YouTube returns much the same first page).
+static LAST_TOP: parking_lot::Mutex<Vec<String>> = parking_lot::Mutex::new(Vec::new());
+
+fn freshen(items: Vec<Item>) -> Vec<Item> {
+    use rand::seq::SliceRandom;
+    let last: std::collections::HashSet<String> = LAST_TOP.lock().iter().cloned().collect();
+    let id = |i: &Item| if let Item::Video(v) = i { Some(v.id.clone()) } else { None };
+    let (mut fresh, mut seen): (Vec<Item>, Vec<Item>) = items.into_iter().partition(|i| id(i).map(|x| !last.contains(&x)).unwrap_or(true));
+    let mut rng = rand::rng();
+    // keep the feed's rough order but mix it within small windows
+    for chunk in fresh.chunks_mut(8) {
+        chunk.shuffle(&mut rng);
+    }
+    seen.shuffle(&mut rng);
+    fresh.append(&mut seen);
+    *LAST_TOP.lock() = fresh.iter().take(24).filter_map(id).collect();
+    fresh
+}
+
 pub struct HomePage {
     chip: usize,
     items: Load<Vec<Item>>,
@@ -34,9 +54,20 @@ impl HomePage {
             let res = blocking(move || -> anyhow::Result<(Vec<Item>, Option<String>)> {
                 if chip == 0 && crate::api::auth::signed_in() {
                     // YouTube's own recommendations for the account
-                    if let Ok(p) = crate::api::auth::home() {
+                    if let Ok(mut p) = crate::api::auth::home() {
                         if !p.items.is_empty() {
-                            return Ok((p.items, p.continuation.map(|c| format!("{ACCOUNT}{c}"))));
+                            // a second page gives a refresh more to choose from
+                            if let Some(c) = p.continuation.take() {
+                                match crate::api::auth::browse_continue(&c) {
+                                    Ok(more) => {
+                                        let have: std::collections::HashSet<String> = p.items.iter().filter_map(|i| i.as_video().map(|v| v.id.clone())).collect();
+                                        p.items.extend(more.items.into_iter().filter(|i| i.as_video().map(|v| !have.contains(&v.id)).unwrap_or(true)));
+                                        p.continuation = more.continuation;
+                                    }
+                                    Err(_) => p.continuation = Some(c),
+                                }
+                            }
+                            return Ok((freshen(p.items), p.continuation.map(|c| format!("{ACCOUNT}{c}"))));
                         }
                     }
                 }
@@ -64,7 +95,7 @@ impl HomePage {
                             }
                             items = out;
                         }
-                        return Ok((items, None));
+                        return Ok((freshen(items), None));
                     }
                     // no subscriptions: popular from several categories, interleaved
                     let lists: Vec<Vec<Item>> = std::thread::scope(|s| {
@@ -94,7 +125,7 @@ impl HomePage {
                             break;
                         }
                     }
-                    Ok((out, None))
+                    Ok((freshen(out), None))
                 } else {
                     let p = innertube::explore(EXPLORE[chip - 1].1)?;
                     Ok((p.items, p.continuation))

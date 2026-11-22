@@ -86,8 +86,12 @@ pub struct WatchInfo {
     pub related: Vec<Item>,
     pub related_continuation: Option<String>,
     pub comments_token: Option<String>,
+    /// "Top" / "Newest" comment sort tokens (from the comments panel header)
+    pub comments_sort: (Option<String>, Option<String>),
     pub comment_count_text: Option<String>,
     pub is_live: bool,
+    /// Live chat continuation tokens for a running stream: (top chat, all messages).
+    pub live_chat: Option<(String, String)>,
     /// When watching in a playlist context.
     pub playlist: Option<WatchPlaylist>,
 }
@@ -223,4 +227,36 @@ pub struct StreamInfo {
     pub captions: Vec<CaptionTrack>,
     pub storyboard: Option<Storyboard>,
     pub source: &'static str,
+    /// Play `hls_url` (through the proxy); `video` then only lists the HLS
+    /// variants so the quality menu has something to offer.
+    pub hls_only: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ChatRole {
+    #[default]
+    Viewer,
+    Member,
+    Moderator,
+    Owner,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChatMessage {
+    pub id: String,
+    pub author: String,
+    pub author_photo: Option<String>,
+    pub text: String,
+    pub role: ChatRole,
+    pub verified: bool,
+    /// Super Chat amount ("₹100.00")
+    pub paid: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChatBatch {
+    pub messages: Vec<ChatMessage>,
+    pub next: Option<String>,
+    /// how long to wait before asking for more
+    pub timeout_ms: u64,
 }

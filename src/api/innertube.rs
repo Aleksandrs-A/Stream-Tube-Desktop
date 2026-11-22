@@ -535,6 +535,40 @@ pub fn search_continue(token: &str) -> Result<Page> {
     Ok(collect_items(&r))
 }
 
+/// The Shorts player's own feed: a fresh, varied sequence each time.
+/// `token` is `None` for the first page, then the returned continuation.
+/// Items only carry ids; titles and channels come from `watch_next` when played.
+pub fn shorts_feed(token: Option<&str>) -> Result<(Vec<VideoItem>, Option<String>)> {
+    let mut ids: Vec<String> = Vec::new();
+    let seq = match token {
+        Some(t) => t.to_string(),
+        None => {
+            let r = call(
+                "reel/reel_item_watch",
+                json!({ "params": "CA8%3D", "disablePlayerResponse": true, "inputType": "REEL_WATCH_INPUT_TYPE_SEEDLESS" }),
+            )?;
+            if let Some(id) = r.pointer("/replacementEndpoint/reelWatchEndpoint/videoId").and_then(Value::as_str) {
+                ids.push(id.to_string());
+            }
+            r.get("sequenceContinuation").and_then(Value::as_str).ok_or_else(|| anyhow!("no shorts sequence"))?.to_string()
+        }
+    };
+    let s = call("reel/reel_watch_sequence", json!({ "sequenceParams": seq }))?;
+    for e in s.get("entries").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(id) = e.pointer("/command/reelWatchEndpoint/videoId").and_then(Value::as_str) {
+            if !ids.iter().any(|x| x == id) {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    let cont = s.pointer("/continuationEndpoint/continuationCommand/token").and_then(Value::as_str).map(str::to_string);
+    let items = ids
+        .into_iter()
+        .map(|id| VideoItem { thumbnail: default_thumb(&id), id, is_short: true, ..Default::default() })
+        .collect();
+    Ok((items, cont))
+}
+
 pub fn suggestions(query: &str) -> Result<Vec<String>> {
     let (hl, gl) = region();
     let url = format!(
@@ -706,6 +740,28 @@ pub fn channel(channel_id: &str, tab_params: Option<&str>) -> Result<ChannelPage
     Ok(ChannelPage { info, banner, tabs, page })
 }
 
+/// Just a channel's avatar, for feeds whose items don't include one.
+pub fn channel_avatar(channel_id: &str) -> Result<Option<String>> {
+    let r = browse(channel_id, None)?;
+    Ok(r
+        .pointer("/metadata/channelMetadataRenderer/avatar")
+        .and_then(small_thumb)
+        .or_else(|| {
+            r.pointer("/header/pageHeaderRenderer/content/pageHeaderViewModel/image/decoratedAvatarViewModel/avatar/avatarViewModel/image")
+                .and_then(small_thumb)
+        }))
+}
+
+/// Finds a channel by its exact display name: (channel id, avatar).
+pub fn channel_by_name(name: &str) -> Result<Option<(String, Option<String>)>> {
+    let page = search(name, &SearchFilter { kind: 2, ..Default::default() })?;
+    let want = name.trim().to_lowercase();
+    Ok(page.items.into_iter().find_map(|i| match i {
+        Item::Channel(c) if c.name.trim().to_lowercase() == want => Some((c.id, c.avatar)),
+        _ => None,
+    }))
+}
+
 /// Searches within a channel.
 pub fn channel_search(channel_id: &str, query: &str) -> Result<Page> {
     let r = call("browse", json!({ "browseId": channel_id, "params": "EgZzZWFyY2jyBgQKAloA", "query": query }))?;
@@ -852,6 +908,28 @@ pub fn watch_next(video_id: &str, playlist_id: Option<&str>) -> Result<WatchInfo
     for sec in sections {
         if sec.get("sectionIdentifier").and_then(Value::as_str) == Some("comment-item-section") {
             w.comments_token = sec.pointer("/contents/0/continuationItemRenderer").and_then(continuation_token);
+        }
+    }
+    if let Some(panels) = r.get("engagementPanels") {
+        if let Some(items) = find(panels, "sortFilterSubMenuRenderer").and_then(|m| m.get("subMenuItems")).and_then(Value::as_array) {
+            let tok = |i: usize| {
+                items
+                    .get(i)
+                    .and_then(|x| x.pointer("/serviceEndpoint/continuationCommand/token"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            };
+            w.comments_sort = (tok(0), tok(1));
+        }
+    }
+    if let Some(lc) = find(&r, "liveChatRenderer").filter(|lc| !lc.get("isReplay").and_then(Value::as_bool).unwrap_or(false)) {
+        // Only the main token works on its own; "Top chat" and "Live chat" differ
+        // by one flag inside it (field 1 = 4 for top, 1 for everything).
+        let first = lc.pointer("/continuations/0/reloadContinuationData/continuation").and_then(Value::as_str).map(str::to_string);
+        let top = first.clone();
+        let all = first.map(|t| t.replacen("ggEMCAQY", "ggEMCAEY", 1));
+        if let (Some(t), Some(a)) = (top, all) {
+            w.live_chat = Some((t, a));
         }
     }
     if let Some(cnt) = find(&results, "commentsEntryPointHeaderRenderer") {
@@ -1173,4 +1251,75 @@ mod tv_parse_tests {
         }
         println!("items={} cont={}", p.items.len(), p.continuation.is_some());
     }
+}
+
+// ───────────────────────── live chat ─────────────────────────
+
+fn chat_text(msg: Option<&Value>) -> String {
+    let Some(runs) = msg.and_then(|m| m.get("runs")).and_then(Value::as_array) else {
+        return msg.map(text).unwrap_or_default();
+    };
+    let mut out = String::new();
+    for r in runs {
+        if let Some(t) = r.get("text").and_then(Value::as_str) {
+            out.push_str(t);
+        } else if let Some(e) = r.get("emoji") {
+            let custom = e.get("isCustomEmoji").and_then(Value::as_bool).unwrap_or(false);
+            let s = if custom {
+                e.pointer("/shortcuts/0").and_then(Value::as_str)
+            } else {
+                e.get("emojiId").and_then(Value::as_str)
+            };
+            out.push_str(s.unwrap_or(""));
+        }
+    }
+    out
+}
+
+fn chat_message(item: &Value) -> Option<ChatMessage> {
+    let (r, paid) = if let Some(r) = item.get("liveChatTextMessageRenderer") {
+        (r, None)
+    } else if let Some(r) = item.get("liveChatPaidMessageRenderer") {
+        (r, opt_text(r.get("purchaseAmountText")))
+    } else {
+        return None;
+    };
+    let mut role = ChatRole::Viewer;
+    let mut verified = false;
+    for b in r.get("authorBadges").and_then(Value::as_array).into_iter().flatten() {
+        let b = b.get("liveChatAuthorBadgeRenderer").unwrap_or(b);
+        match b.pointer("/icon/iconType").and_then(Value::as_str) {
+            Some("OWNER") => role = ChatRole::Owner,
+            Some("MODERATOR") if role != ChatRole::Owner => role = ChatRole::Moderator,
+            Some("VERIFIED") => verified = true,
+            None if b.get("customThumbnail").is_some() && role == ChatRole::Viewer => role = ChatRole::Member,
+            _ => {}
+        }
+    }
+    Some(ChatMessage {
+        id: r.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
+        author: opt_text(r.get("authorName")).unwrap_or_default(),
+        author_photo: r.get("authorPhoto").and_then(best_thumb),
+        text: chat_text(r.get("message")),
+        role,
+        verified,
+        paid,
+    })
+}
+
+/// One poll of a live chat. Reading needs no account.
+pub fn live_chat(token: &str) -> Result<ChatBatch> {
+    let r = call("live_chat/get_live_chat", json!({ "continuation": token }))?;
+    let c = r.pointer("/continuationContents/liveChatContinuation").ok_or_else(|| anyhow!("chat has ended"))?;
+    let mut batch = ChatBatch { timeout_ms: 5000, ..Default::default() };
+    for a in c.get("actions").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(m) = a.pointer("/addChatItemAction/item").and_then(chat_message) {
+            batch.messages.push(m);
+        }
+    }
+    if let Some(next) = c.pointer("/continuations/0").and_then(Value::as_object).and_then(|o| o.values().next()) {
+        batch.next = next.get("continuation").and_then(Value::as_str).map(str::to_string);
+        batch.timeout_ms = next.get("timeoutMs").and_then(Value::as_u64).unwrap_or(5000);
+    }
+    Ok(batch)
 }

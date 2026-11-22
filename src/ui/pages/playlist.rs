@@ -24,16 +24,35 @@ pub struct PlaylistPage {
     scroll: ScrollHandle,
     protected: bool,
     info: Option<PlaylistItem>,
+    /// loaded through the signed-in account (continuations go there too)
+    authed: bool,
+    filter: Option<Entity<gpui_kit::component::input::InputState>>,
+    /// 0 playlist order, 1 title, 2 longest, 3 shortest, 4 channel
+    sort: u8,
 }
 
 impl PlaylistPage {
-    pub fn remote(id: String, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn remote(id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut s = Self::base(Source::Remote(id.clone()));
+        s.make_filter(window, cx);
         cx.spawn(async move |this, cx| {
-            let res = blocking(move || innertube::playlist(&id)).await;
+            let res = blocking(move || {
+                let own = matches!(id.as_str(), "WL" | "LL") || id.starts_with("LL");
+                let signed = crate::api::auth::signed_in();
+                if own && signed {
+                    return crate::api::auth::playlist(&id).map(|p| (p, true));
+                }
+                match innertube::playlist(&id) {
+                    Ok(p) if !p.videos.is_empty() || !signed => Ok((p, false)),
+                    // private / unlisted: only the owner's account can see it
+                    other => crate::api::auth::playlist(&id).map(|p| (p, true)).or_else(|e| other.map(|p| (p, false)).map_err(|_| e)),
+                }
+            })
+            .await;
             let _ = this.update(cx, |this, cx| {
                 match res {
-                    Ok(p) => {
+                    Ok((p, authed)) => {
+                        this.authed = authed;
                         this.title = p.info.title.clone();
                         this.owner = p.info.channel_name.clone().map(|n| (n, p.info.channel_id.clone()));
                         this.count_text = p.info.video_count_text.clone();
@@ -52,10 +71,39 @@ impl PlaylistPage {
         s
     }
 
-    pub fn local(id: i64, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn local(id: i64, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut s = Self::base(Source::Local(id));
+        s.make_filter(window, cx);
         s.reload_local();
         s
+    }
+
+    fn make_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let f = cx.new(|cx| gpui_kit::component::input::InputState::new(window, cx).placeholder("Search in playlist"));
+        cx.observe(&f, |_, _, cx| cx.notify()).detach();
+        self.filter = Some(f);
+    }
+
+    /// Videos after the search filter and sort, with their index in the playlist.
+    fn visible(&self, cx: &App) -> Vec<(usize, VideoItem)> {
+        let q = self.filter.as_ref().map(|f| f.read(cx).value().trim().to_lowercase()).unwrap_or_default();
+        let mut v: Vec<(usize, VideoItem)> = self
+            .videos
+            .ready()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, v)| q.is_empty() || v.title.to_lowercase().contains(&q) || v.channel_name.to_lowercase().contains(&q))
+            .collect();
+        match self.sort {
+            1 => v.sort_by(|a, b| a.1.title.to_lowercase().cmp(&b.1.title.to_lowercase())),
+            2 => v.sort_by(|a, b| b.1.duration_secs.unwrap_or(0).cmp(&a.1.duration_secs.unwrap_or(0))),
+            3 => v.sort_by(|a, b| a.1.duration_secs.unwrap_or(u64::MAX).cmp(&b.1.duration_secs.unwrap_or(u64::MAX))),
+            4 => v.sort_by(|a, b| a.1.channel_name.to_lowercase().cmp(&b.1.channel_name.to_lowercase())),
+            _ => {}
+        }
+        v
     }
 
     fn base(source: Source) -> Self {
@@ -71,6 +119,9 @@ impl PlaylistPage {
             scroll: ScrollHandle::new(),
             protected: false,
             info: None,
+            authed: false,
+            filter: None,
+            sort: 0,
         }
     }
 
@@ -91,8 +142,9 @@ impl PlaylistPage {
             self.loading_more = false;
             return;
         };
+        let authed = self.authed;
         cx.spawn(async move |this, cx| {
-            let res = blocking(move || innertube::browse_continue(&tok)).await;
+            let res = blocking(move || if authed { crate::api::auth::browse_continue(&tok) } else { innertube::browse_continue(&tok) }).await;
             let _ = this.update(cx, |this, cx| {
                 this.loading_more = false;
                 match res {
@@ -188,11 +240,25 @@ impl Render for PlaylistPage {
                         }),
                 )
             })
-            .when_some(self.count_text.clone(), |d, c| d.child(div().text_xs().text_color(p.text2).child(c)))
+            .child({
+                let total: u64 = videos.iter().filter_map(|v| v.duration_secs).sum();
+                let count = self.count_text.clone().unwrap_or_else(|| format!("{} videos", videos.len()));
+                let dur = if total >= 3600 { format!("{} h {} min", total / 3600, (total % 3600) / 60) } else if total > 0 { format!("{} min", total / 60) } else { String::new() };
+                div().flex().gap_2().text_xs().text_color(p.text2).child(count).when(!dur.is_empty(), |d| d.child("•").child(dur))
+            })
             .child(
                 div()
                     .flex()
                     .gap_2()
+                    .child(icon_button("pl-dl", "download", cx).bg(p.chip).on_click(cx.listener(|this, _, _, cx| {
+                        let vids = this.videos.ready().cloned().unwrap_or_default();
+                        crate::downloads::start_many(vids, cx);
+                    })))
+                    .child(icon_button("pl-share", "share-2", cx).bg(p.chip).on_click(cx.listener(|this, _, _, cx| {
+                        if let Source::Remote(id) = &this.source {
+                            copy_to_clipboard(format!("https://www.youtube.com/playlist?list={id}"), cx);
+                        }
+                    })))
                     .when_some(remote_info, |d, info| {
                         d.child(
                             icon_button("pl-save", if saved { "bookmark-check" } else { "bookmark-plus" }, cx).bg(p.chip).on_click(move |_, _, cx| {
@@ -237,9 +303,37 @@ impl Render for PlaylistPage {
             Load::Loading => spinner(cx).into_any_element(),
             Load::Error(e) => error_state(e, cx).into_any_element(),
             Load::Ready(v) if v.is_empty() => empty_state("list-video", "No videos in this playlist yet", "", cx).into_any_element(),
-            Load::Ready(vs) => {
-                let mut col = div().flex().flex_col().gap_1().flex_1().min_w_0();
-                for (i, v) in vs.iter().enumerate() {
+            Load::Ready(_) => {
+                let shown = self.visible(cx);
+                let sort = self.sort;
+                let mut bar = div().flex().items_center().gap_2().pb_3().mb_1().border_b_1().border_color(p.border);
+                if let Some(f) = &self.filter {
+                    bar = bar.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .w(px(260.))
+                            .px_3()
+                            .h_8()
+                            .rounded_full()
+                            .bg(p.chip)
+                            .child(icon("search").size_4().text_color(p.text2))
+                            .child(div().flex_1().child(gpui_kit::component::input::Input::new(f).appearance(false).cleanable(true))),
+                    );
+                }
+                for (k, label) in [(0u8, "Default"), (1, "Title"), (2, "Longest"), (3, "Shortest"), (4, "Channel")] {
+                    bar = bar.child(chip(SharedString::from(format!("pl-sort-{k}")), label, sort == k, cx).on_click(cx.listener(move |this, _, _, cx| {
+                        this.sort = k;
+                        cx.notify();
+                    })));
+                }
+                let mut col = div().flex().flex_col().gap_1().flex_1().min_w_0().child(bar);
+                if shown.is_empty() {
+                    col = col.child(div().py_8().text_sm().text_color(p.text2).child("No videos match"));
+                }
+                let vs = &shown;
+                for (i, v) in vs.iter().map(|(i, v)| (*i, v)) {
                     let vid = v.id.clone();
                     let row = div()
                         .flex()

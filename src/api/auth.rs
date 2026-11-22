@@ -207,8 +207,98 @@ fn fetch_account() -> Result<Account> {
     Ok(Account { name, handle, avatar })
 }
 
-/// Videos only, deduplicated, in feed order.
+/// Channel id -> avatar url, kept across launches. TV feed tiles carry no
+/// channel avatar, so they are filled in from here.
+fn avatar_cache() -> &'static parking_lot::Mutex<std::collections::HashMap<String, String>> {
+    static CACHE: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        let saved = crate::store::kv_get("channel_avatar_cache").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        parking_lot::Mutex::new(saved)
+    })
+}
+
+/// Keys in the avatar cache: "id:<channel id>" -> avatar url and
+/// "name:<lowercase name>" -> "<channel id>|<avatar url>".
+fn name_key(n: &str) -> String {
+    format!("name:{}", n.trim().to_lowercase())
+}
+
+fn fill_avatars(page: &mut Page) {
+    let cache = avatar_cache();
+    // what still needs a lookup: by id when we have one, otherwise by name
+    let (by_id, by_name): (Vec<String>, Vec<String>) = {
+        let mut c = cache.lock();
+        for s in crate::store::subscriptions() {
+            if let Some(a) = s.avatar {
+                c.entry(format!("id:{}", s.channel_id)).or_insert_with(|| a.clone());
+                c.entry(name_key(&s.name)).or_insert(format!("{}|{a}", s.channel_id));
+            }
+        }
+        let (mut by_id, mut by_name) = (Vec::new(), Vec::new());
+        for it in &page.items {
+            let Item::Video(v) = it else { continue };
+            match (&v.channel_id, &v.channel_avatar) {
+                (Some(id), Some(a)) => {
+                    c.entry(format!("id:{id}")).or_insert_with(|| a.clone());
+                }
+                (Some(id), None) if !c.contains_key(&format!("id:{id}")) && !by_id.contains(id) => by_id.push(id.clone()),
+                (None, _) if !v.channel_name.is_empty() && !c.contains_key(&name_key(&v.channel_name)) && !by_name.contains(&v.channel_name) => {
+                    by_name.push(v.channel_name.clone())
+                }
+                _ => {}
+            }
+        }
+        (by_id, by_name)
+    };
+    if !by_id.is_empty() || !by_name.is_empty() {
+        let found: Vec<(String, String)> = std::thread::scope(|s| {
+            let mut handles = Vec::new();
+            for id in &by_id {
+                handles.push(s.spawn(move || {
+                    crate::api::innertube::channel_avatar(id).ok().flatten().map(|a| vec![(format!("id:{id}"), a)]).unwrap_or_default()
+                }));
+            }
+            for name in &by_name {
+                handles.push(s.spawn(move || match crate::api::innertube::channel_by_name(name) {
+                    Ok(Some((id, Some(a)))) => vec![(name_key(name), format!("{id}|{a}")), (format!("id:{id}"), a)],
+                    // remember misses too, so the same name isn't searched on every load
+                    Ok(_) => vec![(name_key(name), String::new())],
+                    Err(_) => vec![],
+                }));
+            }
+            handles.into_iter().filter_map(|h| h.join().ok()).flatten().collect()
+        });
+        if !found.is_empty() {
+            let mut c = cache.lock();
+            c.extend(found);
+            if let Ok(s) = serde_json::to_string(&*c) {
+                crate::store::kv_set("channel_avatar_cache", &s);
+            }
+        }
+    }
+    let c = cache.lock();
+    for it in page.items.iter_mut() {
+        let Item::Video(v) = it else { continue };
+        if v.channel_avatar.is_some() {
+            continue;
+        }
+        if let Some(id) = &v.channel_id {
+            v.channel_avatar = c.get(&format!("id:{id}")).cloned();
+        } else if let Some((id, a)) = c.get(&name_key(&v.channel_name)).and_then(|e| e.split_once('|')) {
+            v.channel_id = Some(id.to_string());
+            v.channel_avatar = Some(a.to_string());
+        }
+    }
+}
+
+/// Videos only, deduplicated, in feed order, with channel avatars filled in.
 fn videos(page: Page) -> Page {
+    let mut page = videos_only(page);
+    fill_avatars(&mut page);
+    page
+}
+
+fn videos_only(page: Page) -> Page {
     let mut seen = std::collections::HashSet::new();
     Page {
         items: page
@@ -234,6 +324,12 @@ pub fn home() -> Result<Page> {
     Ok(videos(collect_items(&r)))
 }
 
+/// The signed-in account's YouTube watch history (newest first).
+pub fn history() -> Result<Page> {
+    let r = tv_call("browse", json!({ "browseId": "FEhistory" }))?;
+    Ok(videos(collect_items(&r)))
+}
+
 /// The signed-in user's subscriptions feed.
 pub fn subscriptions_feed() -> Result<Page> {
     let r = tv_call("browse", json!({ "browseId": "FEsubscriptions" }))?;
@@ -245,6 +341,21 @@ pub fn browse_continue(token: &str) -> Result<Page> {
     Ok(videos(collect_items(&r)))
 }
 
+/// Pulls a "UC…" channel id out of base64 protobuf browse params.
+fn channel_id_from_params(params: &str) -> Option<String> {
+    use base64::Engine;
+    let p = params.replace("%3D", "=").replace("%3d", "=");
+    let p = p.trim_end_matches('=');
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(p)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(p))
+        .ok()?;
+    let s = String::from_utf8_lossy(&bytes);
+    let i = s.find("UC")?;
+    let id: String = s[i..].chars().take(24).collect();
+    (id.len() == 24 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')).then_some(id)
+}
+
 /// Channels the account is subscribed to (the per-channel tabs of the TV subscriptions page).
 pub fn subscribed_channels() -> Result<Vec<ChannelItem>> {
     let r = tv_call("browse", json!({ "browseId": "FEsubscriptions" }))?;
@@ -252,8 +363,17 @@ pub fn subscribed_channels() -> Result<Vec<ChannelItem>> {
     crate::api::json::find_all(&r, "tabRenderer", &mut tabs);
     let mut out: Vec<ChannelItem> = Vec::new();
     for t in tabs {
-        let Some(id) = crate::api::json::find(t, "browseEndpoint").and_then(|b| b.get("browseId")).and_then(Value::as_str) else { continue };
-        if !id.starts_with("UC") || out.iter().any(|c| c.id == id) {
+        let Some(ep) = t.pointer("/endpoint/browseEndpoint").or_else(|| crate::api::json::find(t, "browseEndpoint")) else { continue };
+        // older responses link straight to the channel; newer ones keep the
+        // channel id inside the protobuf `params` of an FEsubscriptions link
+        let id = ep
+            .get("browseId")
+            .and_then(Value::as_str)
+            .filter(|b| b.starts_with("UC"))
+            .map(str::to_string)
+            .or_else(|| ep.get("params").and_then(Value::as_str).and_then(channel_id_from_params));
+        let Some(id) = id else { continue };
+        if out.iter().any(|c| c.id == id) {
             continue;
         }
         let name = t.get("title").map(crate::api::json::text).unwrap_or_default();
@@ -327,5 +447,110 @@ pub fn mark_watched(video_id: &str) -> Result<()> {
     let url = format!("{base}&ver=2&cpn={cpn}");
     let auth = format!("Bearer {token}");
     http::get_bytes(&url, &[("Authorization", &auth), ("User-Agent", TV_UA)])?;
+    Ok(())
+}
+
+/// The signed-in account's playlists (own and saved), incl. Watch later and Liked.
+pub fn my_playlists() -> Result<Vec<PlaylistItem>> {
+    let r = tv_call("browse", json!({ "browseId": "FEplaylist_aggregation" }))?;
+    let mut tiles = Vec::new();
+    crate::api::json::find_all(&r, "tileRenderer", &mut tiles);
+    let mut out: Vec<PlaylistItem> = Vec::new();
+    for t in tiles {
+        if t.get("contentType").and_then(Value::as_str) != Some("TILE_CONTENT_TYPE_PLAYLIST") {
+            continue;
+        }
+        let Some(id) = t.get("contentId").and_then(Value::as_str) else { continue };
+        if out.iter().any(|p| p.id == id) {
+            continue;
+        }
+        let md = t.pointer("/metadata/tileMetadataRenderer");
+        let title = md.and_then(|m| crate::api::json::opt_text(m.get("title"))).unwrap_or_default();
+        let mut lines = Vec::new();
+        if let Some(m) = md {
+            crate::api::json::find_all(m, "lineItemRenderer", &mut lines);
+        }
+        let sub: Vec<String> = lines.iter().filter_map(|l| crate::api::json::opt_text(l.get("text"))).filter(|s| s.trim() != "•").collect();
+        let thumb = t
+            .pointer("/header/tileHeaderRenderer/thumbnail/thumbnails")
+            .and_then(Value::as_array)
+            .and_then(|a| a.last())
+            .and_then(|x| x.get("url"))
+            .and_then(Value::as_str)
+            .map(|u| if u.starts_with("//") { format!("https:{u}") } else { u.to_string() });
+        out.push(PlaylistItem {
+            id: id.to_string(),
+            title,
+            thumbnail: thumb,
+            video_count_text: if sub.is_empty() { None } else { Some(sub.join(" • ")) },
+            ..Default::default()
+        });
+    }
+    Ok(out)
+}
+
+/// A playlist as the signed-in account sees it (works for private / unlisted ones).
+pub fn playlist(playlist_id: &str) -> Result<PlaylistPage> {
+    let r = tv_call("browse", json!({ "browseId": format!("VL{playlist_id}") }))?;
+    let page = videos_only(collect_items(&r));
+    let mut info = PlaylistItem { id: playlist_id.to_string(), ..Default::default() };
+    if let Some(m) = crate::api::json::find(&r, "entityMetadataRenderer") {
+        info.title = crate::api::json::opt_text(m.get("title")).unwrap_or_default();
+        let mut lines = Vec::new();
+        crate::api::json::find_all(m, "lineItemRenderer", &mut lines);
+        let parts: Vec<String> = lines.iter().filter_map(|l| crate::api::json::opt_text(l.get("text"))).filter(|s| s.trim() != "•").collect();
+        if let Some(c) = parts.iter().find(|p| p.to_lowercase().contains("video")) {
+            info.video_count_text = Some(c.clone());
+        }
+        if let Some(o) = parts.first().filter(|p| !p.to_lowercase().contains("video")) {
+            info.channel_name = Some(o.clone());
+        }
+    }
+    let videos: Vec<VideoItem> = page
+        .items
+        .into_iter()
+        .filter_map(|i| match i {
+            Item::Video(v) => Some(v),
+            _ => None,
+        })
+        .collect();
+    info.thumbnail = videos.first().map(|v| v.thumbnail.clone());
+    info.first_video_id = videos.first().map(|v| v.id.clone());
+    Ok(PlaylistPage { info, description: None, videos, continuation: page.continuation })
+}
+
+/// Posts a message to a live stream's chat as the signed-in account.
+pub fn send_live_chat(channel_id: &str, video_id: &str, message: &str) -> Result<()> {
+    // protobuf { 1: { 5: { 1: channel, 2: video } }, 2: 1, 3: 4 }
+    fn field(out: &mut Vec<u8>, tag: u8, bytes: &[u8]) {
+        out.push(tag);
+        let mut n = bytes.len();
+        while n >= 0x80 {
+            out.push((n as u8 & 0x7f) | 0x80);
+            n >>= 7;
+        }
+        out.push(n as u8);
+        out.extend_from_slice(bytes);
+    }
+    use base64::Engine;
+    let mut ids = Vec::new();
+    field(&mut ids, 0x0a, channel_id.as_bytes());
+    field(&mut ids, 0x12, video_id.as_bytes());
+    let mut inner = Vec::new();
+    field(&mut inner, 0x2a, &ids);
+    let mut buf = Vec::new();
+    field(&mut buf, 0x0a, &inner);
+    buf.extend_from_slice(&[0x10, 0x01, 0x18, 0x04]);
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let params = b64.encode(crate::api::http::urlencode(&b64.encode(&buf)));
+    let client_id = format!("st{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    let r = tv_call(
+        "live_chat/send_message",
+        json!({ "params": params, "clientMessageId": client_id, "richMessage": { "textSegments": [{ "text": message }] } }),
+    )?;
+    if let Some(err) = crate::api::json::find(&r, "liveChatRestrictedParticipationRenderer").or_else(|| crate::api::json::find(&r, "errorMessage")) {
+        let t = crate::api::json::text(err.get("message").unwrap_or(err));
+        anyhow::bail!(if t.is_empty() { "YouTube did not accept the message".to_string() } else { t });
+    }
     Ok(())
 }
