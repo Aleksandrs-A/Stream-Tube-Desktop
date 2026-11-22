@@ -124,13 +124,13 @@ release comes out (*Settings → About*).
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.2.0.alpha_amd64.deb
+sudo apt install ./streamtube_0.2.0-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.2.0.alpha-1.x86_64.rpm
+sudo dnf install ./streamtube-0.2.0-alpha.x86_64.rpm
 ```
 
 **Other Linux (x86_64)**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run

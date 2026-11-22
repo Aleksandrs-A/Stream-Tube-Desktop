@@ -89,6 +89,10 @@ jobs:
 
           fpm "${common[@]}" -t rpm -p dist/ --rpm-autoreqprov --depends "(mpv-libs or libmpv2 or mpv)" usr
 
+          # GitHub turns "~" in asset names into "."; the file names use the plain
+          # version, the package metadata keeps "~" so upgrades sort correctly
+          mv dist/*.deb "dist/streamtube_${version}_amd64.deb"
+          mv dist/*.rpm "dist/streamtube-${version}.x86_64.rpm"
           ls -l dist
           deb=$(ls dist/*.deb); rpm=$(ls dist/*.rpm)
           dpkg-deb --info "$deb"
