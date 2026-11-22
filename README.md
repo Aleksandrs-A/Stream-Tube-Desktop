@@ -31,6 +31,12 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
 ## What it does
 
+**No ads, anywhere**
+- No pre-roll, mid-roll or overlay ads: the app plays the video stream directly, so YouTube's ads are never loaded
+- No promoted videos, banners or sponsored cards in Home, search or Shorts
+- Sponsor reads inside videos are skipped too, with SponsorBlock (below)
+- Nothing to install or keep updated: it isn't an ad blocker that YouTube can break, ads simply aren't part of how the app plays video
+
 **Watching**
 - Home, Shorts, Subscriptions, Explore categories, channels, playlists and search, with search suggestions and your recent searches
 - libmpv player with hardware decoding, codec preference (AV1, VP9 or H.264), 360p up to 4K, enhanced bitrate, speed control (remembered per channel if you want), captions with adjustable size and background, chapters and seek-bar preview thumbnails
