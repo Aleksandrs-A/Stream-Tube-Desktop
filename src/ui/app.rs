@@ -1876,9 +1876,11 @@ impl AppView {
                 return div().text_sm().text_color(p.text2).child("No update available").into_any_element();
             }
         };
-        let mut notes: String = rel.notes.replace("\r\n", "\n").lines().map(|l| l.trim_start_matches(['#', ' '])).collect::<Vec<_>>().join("\n");
-        if notes.chars().count() > 700 {
-            notes = notes.chars().take(700).collect::<String>() + "…";
+        // release notes are Markdown; long ones are cut at a line break
+        let mut notes = rel.notes.replace("\r\n", "\n");
+        if notes.chars().count() > 900 {
+            let cut: String = notes.chars().take(900).collect();
+            notes = cut.rsplit_once('\n').map(|(a, _)| a.to_string()).unwrap_or(cut) + "\n\n…";
         }
         let has_installer = cfg!(windows) && rel.asset.is_some();
         let size = rel.asset.as_ref().map(|a| a.2).filter(|s| *s > 0).map(|s| format!(" · {:.0} MB", s as f64 / 1_048_576.0)).unwrap_or_default();
@@ -1894,7 +1896,20 @@ impl AppView {
                     .child(format!("{}{} — you have {}{}", rel.name, if rel.prerelease { " (pre-release)" } else { "" }, crate::updater::current_version(), size)),
             );
         if !notes.trim().is_empty() {
-            col = col.child(div().max_h(px(220.)).overflow_hidden().p_3().rounded_lg().bg(p.hover).text_sm().text_color(p.text).child(notes));
+            col = col.child(
+                div()
+                    .id("upd-notes")
+                    .max_h(px(260.))
+                    .overflow_y_scroll()
+                    .p_3()
+                    .rounded_lg()
+                    .bg(p.hover)
+                    .text_sm()
+                    .text_color(p.text)
+                    .child(gpui_kit::base::TextView::markdown("upd-notes-md", notes).on_link_click(|url, _, _, _| {
+                        let _ = open::that(url.as_ref() as &str);
+                    })),
+            );
         }
         if let Some(f) = progress {
             col = col
