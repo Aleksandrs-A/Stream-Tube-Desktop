@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/version-0.2.0--alpha-F0307E" alt="Version 0.2.0-alpha">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D6" alt="Windows and Linux">
   <img src="https://img.shields.io/github/v/release/Avaneesh-Inamdar/Stream-Tube-Desktop?include_prereleases&label=release" alt="Latest release">
   <img src="https://img.shields.io/badge/built%20with-Rust-B7410E" alt="Rust">
@@ -38,9 +39,12 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Keeps playing when minimized, has an audio-only mode, or can hand a video off to an external player
 - Live streams with live chat (Top chat or every message), and chatting when signed in
 - Hold Space or press and hold on the video to play at 2x
+- Hover previews: rest the pointer on a thumbnail and it plays inside it, muted, with a seek bar to skip around
+- Most replayed graph with "jump ahead", ambient glow around the player, force original audio instead of auto-dubbing
 
 **Less noise**
 - SponsorBlock with per-category behaviour: skip automatically, ask, only mark it on the seek bar, or ignore
+- Use your own SponsorBlock private ID and see your contribution stats (segments, skips by others, time saved)
 - DeArrow titles and thumbnails, so you see what a video is actually about
 - Return YouTube Dislike counts
 - Hide Shorts, live streams, premieres, comments, related videos, view counts and more
@@ -48,7 +52,8 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
 **Your data stays yours**
 - Subscriptions can live locally. The feed is built by fetching each channel directly, no account needed
-- Or sign in with your Google account to get your own Home feed, subscriptions, watch history, playlists, likes and subscribe button
+- Or sign in with your Google account to get your own Home feed, subscriptions, playlists, likes and subscribe button
+- Watch history from your other devices syncs in with resume positions, and single entries can be removed
 - History, watch later, favourites and playlists are stored in a local SQLite database
 - Import from YouTube Takeout, NewPipe, FreeTube or OPML. Export to NewPipe JSON, YouTube CSV, OPML or a full backup
 
@@ -58,7 +63,33 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
 **Looks the way you like**
 - Dark, light or follow Windows
-- Six accent colours, interface scaling, density, thumbnail corner style and grid columns
+- Seven accent colours used across the app, interface scaling, density, thumbnail corner style and grid columns
+
+**Opens YouTube links**
+- `streamtube://` links open in the app, and a browser bookmark (*Settings → General*) sends the YouTube page you're on to Stream Tube
+- Links opened while the app is running reuse the open window
+
+## Performance
+
+Stream Tube versus youtube.com in Microsoft Edge (clean profile, no extensions) on
+the same Windows 11 PC, playing the same video. Numbers are averaged over ten
+seconds and add up every process involved.
+
+| | youtube.com in Edge | Stream Tube 0.2.0-alpha |
+|---|---|---|
+| Processes | 11–12 | 1 |
+| RAM, idle on Home (working set) | 1,073 MB | **302 MB** |
+| RAM, idle on Home (private) | 670 MB | **333 MB** |
+| RAM, playing a video (working set) | 1,203 MB | **507 MB** |
+| RAM, playing a video (private) | 769 MB | **545 MB** |
+| CPU while playing | ~0.7% | ~1.6% |
+
+Idle, Stream Tube uses about a third of the RAM the browser needs for the same page.
+While playing it uses well under half. Much of that is a read-ahead buffer (up to
+200 MB) that keeps seeking instant. The browser uses less CPU in this test because
+it decodes video on the GPU by default. Turn on *Settings → Player → Hardware
+decoding* to do the same in Stream Tube. Results depend on the video, resolution
+and hardware.
 
 ## Screenshots
 
@@ -90,7 +121,19 @@ This is an early alpha, so expect rough edges.
 your user only, so no administrator prompt, and the app updates itself when a new
 release comes out (*Settings → About*).
 
-**Linux (x86_64)**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
+**Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
+
+```sh
+sudo apt install ./streamtube_0.2.0.alpha_amd64.deb
+```
+
+**Fedora, openSUSE**: install the `.rpm`:
+
+```sh
+sudo dnf install ./streamtube-0.2.0.alpha-1.x86_64.rpm
+```
+
+**Other Linux (x86_64)**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
 `./install.sh`. It puts the app in `~/.local/bin` and adds a menu entry.
 Video plays through libmpv, so install it if you don't have it:
 
@@ -129,7 +172,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.1.0-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.2.0-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in
