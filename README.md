@@ -41,12 +41,12 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Home, Shorts, Subscriptions, Explore categories, channels (including their courses and shows), playlists and search, with search suggestions and your recent searches
 - A personal Home without an account: "For you" recommends videos related to what you've watched and searched in the app, mixed with new uploads from your subscriptions. Signed in, Home is your own YouTube Home feed
 - Shorts follow your account's recommendations when you're signed in, or start from the Shorts you watched last
-- libmpv player with hardware decoding, codec preference (AV1, VP9 or H.264), 360p up to 4K, enhanced bitrate, speed control (remembered per channel if you want), captions with adjustable size and background, chapters and seek-bar preview thumbnails
+- libmpv player with hardware decoding, codec preference (AV1, VP9 or H.264), 360p up to 4K, enhanced bitrate, speed control (remembered per channel if you want), captions you can style (font, colour, opacity, background and edge, with a live preview), chapters and seek-bar preview thumbnails
 - Resumes where you left off, remembers your last quality, autoplays the next video or loops, and plays whole playlists as a queue
-- A miniplayer while you browse, a picture-in-picture window, theater mode and fullscreen
+- A miniplayer while you browse that you can drag anywhere and resize (it remembers where you put it), a picture-in-picture window, theater mode and fullscreen
 - Keeps playing when minimized, or pauses and resumes when you come back
 - Live streams with live chat (Top chat or every message), and chatting when signed in
-- Shorts in a vertical player that moves to the next one by itself, or open them in the regular player
+- Shorts in a vertical player that moves to the next one by itself, or open them in the regular player. Shorts comments open their replies as threads too
 - Hold Space or press and hold on the video to play at 2x
 - Hover previews: rest the pointer on a thumbnail and it plays inside it, muted, with a seek bar to skip around
 - Most replayed graph with "jump ahead", ambient glow around the player (on or off from the player's gear menu), force original audio instead of auto-dubbing
@@ -54,7 +54,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Comments sorted by Top, Timed or Newest. *Timed* works like youtube.com: comments that mention a moment of the video appear as playback reaches it
 - Comments show GIFs, stickers and channel emojis, and replies are drawn as threads, with answers to a reply nested under it
 - Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous, and Ctrl+←/→ for the previous/next chapter)
-- Can hand a video off to an external player such as mpv or VLC
+- "Open in external player" with no setup: it uses VLC or mpv if one is installed, otherwise your default video player, and continues from where you were
 - Right-click the video for loop, copy link (optionally at the current time), screenshot and **Stats for nerds**: resolution, codecs, dropped frames, hardware decoding, bitrate, buffer health and connection speed, updated live (also *Shift+I*)
 
 **Saves data**
@@ -86,16 +86,17 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
 **Network**
 - A proxy setting (HTTP or SOCKS) that covers browsing, playback, thumbnails, downloads and sign-in
+- On Linux, a choice of Wayland or X11, with an automatic switch to X11 if a Wayland window never shows up (ChromeOS)
 - IPv4-only mode, and a choice of playback client (visionOS, Android VR or yt-dlp) if videos ever stop loading
 
 **Looks the way you like**
 - Dark, light or follow Windows
 - Seven accent colours used across the app, and the app icon changes colour to match, on the taskbar and on your desktop shortcuts too
 - Interface scaling, density, thumbnail corner style, grid columns, start page, language and region
-- Smooth page, dialog and menu transitions
+- Smooth page, dialog and menu transitions, and mouse-wheel scrolling that glides instead of jumping
 
 **Keeps itself up to date**
-- Checks for new releases at startup and installs them in one click, and can update yt-dlp for you
+- Checks for new releases at startup and installs them in one click, and can update yt-dlp for you. Every download is checked against its SHA-256 before it is used
 
 ## Performance
 
