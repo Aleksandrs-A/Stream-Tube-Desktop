@@ -18,7 +18,16 @@ pub struct Release {
     pub page: String,
     pub prerelease: bool,
     /// installer (Windows) or archive (Linux) for this platform
-    pub asset: Option<(String, String, u64)>,
+    pub asset: Option<Asset>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Asset {
+    pub name: String,
+    pub url: String,
+    pub size: u64,
+    /// SHA-256 that GitHub reports for the file (lowercase hex)
+    pub sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -71,7 +80,7 @@ pub fn is_newer(tag: &str, current: &str) -> bool {
     parse_version(tag) > parse_version(current)
 }
 
-fn pick_asset(assets: &[Value]) -> Option<(String, String, u64)> {
+fn pick_asset(assets: &[Value]) -> Option<Asset> {
     let want = |name: &str| {
         let n = name.to_ascii_lowercase();
         if cfg!(windows) {
@@ -85,8 +94,37 @@ fn pick_asset(assets: &[Value]) -> Option<(String, String, u64)> {
         if !want(name) {
             return None;
         }
-        Some((name.to_string(), a.get("browser_download_url")?.as_str()?.to_string(), a.get("size").and_then(Value::as_u64).unwrap_or(0)))
+        let url = a.get("browser_download_url")?.as_str()?;
+        // only files of this project's releases, saved under a plain file name
+        let plain = !name.is_empty() && !name.contains(['/', '\\', ':']) && !name.starts_with('.');
+        if !plain || !url.starts_with(&format!("https://github.com/{REPO}/releases/download/")) {
+            return None;
+        }
+        let sha256 = a
+            .get("digest")
+            .and_then(Value::as_str)
+            .and_then(|d| d.strip_prefix("sha256:"))
+            .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+            .map(str::to_ascii_lowercase);
+        Some(Asset { name: name.to_string(), url: url.to_string(), size: a.get("size").and_then(Value::as_u64).unwrap_or(0), sha256 })
     })
+}
+
+/// SHA-256 of a file, as lowercase hex.
+fn file_sha256(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// The newest published release, if it is newer than this build.
@@ -184,7 +222,7 @@ pub fn install(cx: &mut App) {
         Status::Available(r) => r.clone(),
         _ => return,
     };
-    let Some((name, url, size)) = rel.asset.clone().filter(|_| cfg!(windows)) else {
+    let Some(Asset { name, url, size, sha256 }) = rel.asset.clone().filter(|_| cfg!(windows)) else {
         // no installer for this platform: the release page has the downloads
         let _ = open::that(&rel.page);
         return;
@@ -210,6 +248,15 @@ pub fn install(cx: &mut App) {
             drop(f);
             if size > 0 && std::fs::metadata(&path)?.len() != size {
                 anyhow::bail!("the download is incomplete");
+            }
+            // the installer runs only if it is exactly the file GitHub has on the release
+            let Some(want) = sha256 else {
+                let _ = std::fs::remove_file(&path);
+                anyhow::bail!("GitHub gave no checksum for the installer. Download it from the releases page");
+            };
+            if file_sha256(&path)? != want {
+                let _ = std::fs::remove_file(&path);
+                anyhow::bail!("the download doesn't match the release's checksum");
             }
             Ok(path)
         })();
@@ -250,7 +297,7 @@ fn run_installer(path: &std::path::Path, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::is_newer;
+    use super::{is_newer, pick_asset};
     #[test]
     fn versions() {
         assert!(is_newer("v0.1.0", "0.1.0-alpha"));
@@ -259,5 +306,19 @@ mod tests {
         assert!(is_newer("v0.2.0-alpha", "0.1.0"));
         assert!(!is_newer("v0.1.0-alpha", "0.1.0-alpha"));
         assert!(!is_newer("v0.1.0-alpha", "0.1.0"));
+    }
+
+    #[test]
+    fn assets_come_from_this_repo_with_a_checksum() {
+        let ext = if cfg!(windows) { "setup.exe" } else { "linux-x86_64.tar.gz" };
+        let asset = |name: &str, url: &str| {
+            serde_json::json!({ "name": name, "browser_download_url": url, "size": 5, "digest": format!("sha256:{}", "AB".repeat(32)) })
+        };
+        let good = format!("StreamTube-1.0.0-{ext}");
+        let ok = pick_asset(&[asset(&good, &format!("https://github.com/{}/releases/download/v1.0.0/{good}", super::REPO))]).unwrap();
+        assert_eq!(ok.sha256.as_deref(), Some("ab".repeat(32).as_str()));
+        // another repository, or a name that is a path
+        assert!(pick_asset(&[asset(&good, &format!("https://github.com/someone/else/releases/download/v1.0.0/{good}"))]).is_none());
+        assert!(pick_asset(&[asset(&format!("..\\{good}"), &format!("https://github.com/{}/releases/download/v1.0.0/x", super::REPO))]).is_none());
     }
 }
