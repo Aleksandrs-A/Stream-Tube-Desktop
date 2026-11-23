@@ -63,6 +63,7 @@ jobs:
           install -Dm644 packaging/linux/streamtube.desktop "$root/usr/share/applications/streamtube.desktop"
           install -Dm644 assets/logo.png "$root/usr/share/icons/hicolor/256x256/apps/streamtube.png"
           install -Dm644 assets/logo.svg "$root/usr/share/icons/hicolor/scalable/apps/streamtube.svg"
+          install -Dm644 packaging/linux/streamtube.appdata.xml "$root/usr/share/metainfo/streamtube.appdata.xml"
           install -Dm644 LICENSE "$root/usr/share/doc/streamtube/LICENSE"
           install -Dm644 README.md "$root/usr/share/doc/streamtube/README.md"
 
@@ -105,7 +106,7 @@ jobs:
         run: |
           # libmpv (and everything it links against) goes inside, so the AppImage
           # plays video on any distribution without installing anything
-          sudo apt-get install -y --no-install-recommends libmpv1 file desktop-file-utils
+          sudo apt-get install -y --no-install-recommends libmpv1 file desktop-file-utils appstream
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           out="dist/StreamTube-${version}-x86_64.AppImage"
           wget -q -O linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
@@ -118,7 +119,9 @@ jobs:
           install -Dm644 assets/logo.png "$app/usr/share/icons/hicolor/256x256/apps/streamtube.png"
           install -Dm644 assets/logo.svg "$app/usr/share/icons/hicolor/scalable/apps/streamtube.svg"
           install -Dm644 LICENSE "$app/usr/share/doc/streamtube/LICENSE"
+          install -Dm644 packaging/linux/streamtube.appdata.xml "$app/usr/share/metainfo/streamtube.appdata.xml"
           desktop-file-validate "$app/usr/share/applications/streamtube.desktop" || true
+          appstreamcli validate --no-net "$app/usr/share/metainfo/streamtube.appdata.xml" || true
 
           mpv=$(ls /usr/lib/x86_64-linux-gnu/libmpv.so.2 /usr/lib/x86_64-linux-gnu/libmpv.so.1 2>/dev/null | head -1)
           echo "bundling $mpv"
