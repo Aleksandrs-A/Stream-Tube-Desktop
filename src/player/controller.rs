@@ -678,24 +678,32 @@ impl Player {
         cx.notify();
     }
 
-    /// Applies caption styling settings to mpv.
+    /// Applies caption styling settings to mpv (see [`caption_font`] and [`mpv_color`]).
     fn apply_caption_style(&self) {
         let Some(mpv) = &self.mpv else { return };
         let s = store::settings_snapshot();
         mpv.set("sub-font-size", &s.caption_size.to_string());
-        mpv.set("sub-font", "Segoe UI");
+        mpv.set("sub-font", caption_font(&s.caption_font));
         mpv.set("sub-bold", "no");
         mpv.set("sub-margin-y", "40");
+        mpv.set("sub-color", &mpv_color(s.caption_color, s.caption_opacity));
         if s.caption_background {
             mpv.set("sub-border-style", "background-box");
-            mpv.set("sub-back-color", "#BF080808");
+            mpv.set("sub-back-color", &mpv_color(s.caption_bg_color, s.caption_bg_opacity));
             mpv.set("sub-border-size", "2");
             mpv.set("sub-shadow-offset", "0");
         } else {
             mpv.set("sub-border-style", "outline-and-shadow");
             mpv.set("sub-border-color", "#FF000000");
-            mpv.set("sub-border-size", "2.5");
-            mpv.set("sub-shadow-offset", "1");
+            mpv.set("sub-shadow-color", "#80000000");
+            let (border, shadow) = match s.caption_edge.as_str() {
+                "outline" => ("2.5", "0"),
+                "shadow" => ("0", "2"),
+                "none" => ("0", "0"),
+                _ => ("2.5", "1"),
+            };
+            mpv.set("sub-border-size", border);
+            mpv.set("sub-shadow-offset", shadow);
         }
     }
 
@@ -1067,4 +1075,40 @@ fn average_color(data: &[u8], w: u32, h: u32) -> Option<Rgba> {
     }
     let f = |v: u64| ((v as f32 / n as f32) / 255.0 * 1.25).min(1.0);
     Some(Rgba { r: f(r), g: f(g), b: f(b), a: 1.0 })
+}
+
+/// The font for a caption font choice. libass looks fonts up by name, and finds
+/// the nearest match when one isn't installed.
+pub fn caption_font(key: &str) -> &'static str {
+    if cfg!(windows) {
+        match key {
+            "serif" => "Georgia",
+            "mono" => "Consolas",
+            "casual" => "Comic Sans MS",
+            _ => "Segoe UI",
+        }
+    } else {
+        match key {
+            "serif" => "DejaVu Serif",
+            "mono" => "DejaVu Sans Mono",
+            "casual" => "Comic Neue",
+            _ => "DejaVu Sans",
+        }
+    }
+}
+
+/// 0xRRGGBB plus an opacity in percent, as mpv's "#AARRGGBB".
+pub fn mpv_color(rgb: u32, opacity: u32) -> String {
+    let a = (opacity.min(100) * 255 + 50) / 100;
+    format!("#{a:02X}{:06X}", rgb & 0xFFFFFF)
+}
+
+#[cfg(test)]
+mod caption_tests {
+    #[::core::prelude::v1::test]
+    fn colors() {
+        assert_eq!(super::mpv_color(0xFFFF00, 100), "#FFFFFF00");
+        assert_eq!(super::mpv_color(0x000000, 75), "#BF000000");
+        assert_eq!(super::mpv_color(0x123456, 0), "#00123456");
+    }
 }

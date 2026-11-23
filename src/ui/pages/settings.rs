@@ -192,6 +192,55 @@ thread_local! {
     static QUERY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
+const CAPTION_COLORS: &[(u32, &str)] = &[
+    (0xFFFFFF, "White"),
+    (0xFFFF00, "Yellow"),
+    (0x00FF00, "Green"),
+    (0x00FFFF, "Cyan"),
+    (0x0000FF, "Blue"),
+    (0xFF00FF, "Magenta"),
+    (0xFF0000, "Red"),
+    (0x000000, "Black"),
+];
+const OPACITIES: &[(u32, &str)] = &[(25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")];
+
+/// How captions will look with the current settings, over a stand-in for video.
+fn caption_preview(s: &Settings) -> AnyElement {
+    let rgba = |rgb: u32, pct: u32| {
+        let mut c: Hsla = rgb_to(rgb);
+        c.a = pct.min(100) as f32 / 100.0;
+        c
+    };
+    let text = div()
+        .px_2()
+        .py_0p5()
+        .font_family(crate::player::controller::caption_font(&s.caption_font))
+        // the player's caption size is for a 720p frame; this box is about a third of that
+        .text_size(px(s.caption_size as f32 * 0.45))
+        .text_color(rgba(s.caption_color, s.caption_opacity))
+        .when(s.caption_background, |d| d.bg(rgba(s.caption_bg_color, s.caption_bg_opacity)))
+        .child("Captions look like this");
+    div()
+        .w(px(320.))
+        .h(px(90.))
+        .flex()
+        .items_end()
+        .justify_center()
+        .pb_3()
+        .rounded_lg()
+        .bg(gpui_kit::linear_gradient(
+            135.,
+            gpui_kit::linear_color_stop(rgb_to(0x5A7FA8), 0.),
+            gpui_kit::linear_color_stop(rgb_to(0x2E4A3A), 1.),
+        ))
+        .child(text)
+        .into_any_element()
+}
+
+fn rgb_to(c: u32) -> Hsla {
+    rgb(c).into()
+}
+
 fn row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
     let p = pal(cx);
     let hidden = QUERY.with(|q| {
@@ -538,7 +587,34 @@ impl SettingsPage {
             .child(row("Captions on by default", "", switch("cc", s.captions_enabled, |s, v| s.captions_enabled = v, cx), cx))
             .child(row("Caption language", "Preferred subtitle track", self.dropdown("dd-cap", crate::locale::LANGUAGES, s.captions_lang.clone(), |s, v| s.captions_lang = v, cx), cx))
             .child(row("Caption size", "", self.choice("capsize", &[(30u32, "Small"), (40, "Medium"), (52, "Large"), (64, "Extra large")], s.caption_size, |s, v| s.caption_size = v, cx), cx))
+            .child(row(
+                "Caption font",
+                "",
+                self.choice("capfont", &[("sans".to_string(), "Sans-serif"), ("serif".to_string(), "Serif"), ("mono".to_string(), "Monospace"), ("casual".to_string(), "Casual")], s.caption_font.clone(), |s, v| s.caption_font = v, cx),
+                cx,
+            ))
+            .child(row("Caption color", "", self.choice("capcolor", CAPTION_COLORS, s.caption_color, |s, v| s.caption_color = v, cx), cx))
+            .child(row("Caption opacity", "", self.choice("capop", OPACITIES, s.caption_opacity, |s, v| s.caption_opacity = v, cx), cx))
             .child(row("Caption background", "", switch("capbg", s.caption_background, |s, v| s.caption_background = v, cx), cx))
+            .when(s.caption_background, |d| {
+                d.child(row("Background color", "", self.choice("capbgc", CAPTION_COLORS, s.caption_bg_color, |s, v| s.caption_bg_color = v, cx), cx))
+                    .child(row("Background opacity", "", self.choice("capbgo", OPACITIES, s.caption_bg_opacity, |s, v| s.caption_bg_opacity = v, cx), cx))
+            })
+            .when(!s.caption_background, |d| {
+                d.child(row(
+                    "Character edge",
+                    "Around the text when there's no background",
+                    self.choice(
+                        "capedge",
+                        &[("outline-shadow".to_string(), "Outline and shadow"), ("outline".to_string(), "Outline"), ("shadow".to_string(), "Drop shadow"), ("none".to_string(), "None")],
+                        s.caption_edge.clone(),
+                        |s, v| s.caption_edge = v,
+                        cx,
+                    ),
+                    cx,
+                ))
+            })
+            .child(row("Preview", "", caption_preview(&s), cx))
             .child(row("Hide controls after", "", self.choice("hide", &[(1500u64, "1.5s"), (2500, "2.5s"), (4000, "4s"), (8000, "8s")], s.controls_hide_ms, |s, v| s.controls_hide_ms = v, cx), cx))
             .child(row("Seek bar preview thumbnails", "", switch("sbprev", s.show_storyboard, |s, v| s.show_storyboard = v, cx), cx))
             .child(row("Arrow key seek step", "", self.choice("step", &[(5.0f64, "5s"), (10.0, "10s"), (15.0, "15s"), (30.0, "30s")], s.seek_step, |s, v| s.seek_step = v, cx), cx))

@@ -83,6 +83,17 @@ pub struct Settings {
     pub thumb_radius: f32,
     pub caption_size: u32,
     pub caption_background: bool,
+    /// "sans", "serif", "mono" or "casual"
+    pub caption_font: String,
+    /// 0xRRGGBB
+    pub caption_color: u32,
+    /// percent
+    pub caption_opacity: u32,
+    pub caption_bg_color: u32,
+    pub caption_bg_opacity: u32,
+    /// edge around the text when there's no background:
+    /// "outline-shadow", "outline", "shadow" or "none"
+    pub caption_edge: String,
     pub controls_hide_ms: u64,
     pub show_storyboard: bool,
     // SponsorBlock account (private ID, used for voting)
@@ -181,6 +192,12 @@ impl Default for Settings {
             thumb_radius: 12.0,
             caption_size: 40,
             caption_background: true,
+            caption_font: "sans".into(),
+            caption_color: 0xFFFFFF,
+            caption_opacity: 100,
+            caption_bg_color: 0x000000,
+            caption_bg_opacity: 75,
+            caption_edge: "outline-shadow".into(),
             controls_hide_ms: 2500,
             show_storyboard: true,
             sb_user_id: String::new(),
