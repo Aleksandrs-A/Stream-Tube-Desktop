@@ -50,6 +50,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Most replayed graph with "jump ahead", ambient glow around the player, force original audio instead of auto-dubbing
 - Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous)
 - Can hand a video off to an external player such as mpv or VLC
+- Right-click the video for loop, copy link (optionally at the current time), screenshot and **Stats for nerds**: resolution, codecs, dropped frames, hardware decoding, bitrate, buffer health and connection speed, updated live (also *Shift+I*)
 
 **Saves data**
 - Audio only mode fetches just the audio stream, so podcasts, music and talks use a fraction of the data
@@ -70,6 +71,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Subscriptions can live locally. The feed is built by fetching each channel directly, no account needed
 - Or sign in with your Google account to get your own Home feed, subscriptions, playlists, likes and subscribe button
 - Watch history and search history from your other devices sync in, with resume positions, and single entries can be removed
+- Connect your YouTube history (*Settings → General*) and it works the other way too: videos you watch in Stream Tube show up in your YouTube history, and your phone or TV resumes them where you stopped. You sign in once in a browser window with a fresh profile (Chrome, Edge, Brave or Chromium) that closes and is deleted afterwards, or load a `cookies.txt` file instead
 - History, watch later, favourites and playlists are stored in a local SQLite database, and you can pause or clear history at any time
 - Import from YouTube Takeout, NewPipe, FreeTube or OPML. Export to NewPipe JSON, YouTube CSV, OPML or a full backup
 
@@ -96,7 +98,7 @@ Stream Tube versus youtube.com in Microsoft Edge (clean profile, no extensions) 
 the same Windows 11 PC, playing the same video. Numbers are the working set of
 every process involved, after browsing a few pages.
 
-| | youtube.com in Edge | Stream Tube 0.3.0-alpha |
+| | youtube.com in Edge | Stream Tube 0.4.0-alpha |
 |---|---|---|
 | Processes | 11–12 | 1 |
 | RAM, idle on Home | 1,073 MB | **~405 MB** |
@@ -141,13 +143,13 @@ release comes out (*Settings → About*).
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.3.0-alpha_amd64.deb
+sudo apt install ./streamtube_0.4.0-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.3.0-alpha.x86_64.rpm
+sudo dnf install ./streamtube-0.4.0-alpha.x86_64.rpm
 ```
 
 **Other Linux (x86_64)**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
@@ -189,7 +191,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.3.0-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.4.0-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in

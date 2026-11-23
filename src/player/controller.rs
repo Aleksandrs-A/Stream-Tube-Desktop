@@ -61,6 +61,8 @@ pub struct Player {
     pub channel_id: Option<String>,
     pub last_activity: std::time::Instant,
     pub audio_track: Option<String>,
+    /// "Stats for nerds" overlay
+    pub show_stats: bool,
 }
 
 impl EventEmitter<PlayerEvent> for Player {}
@@ -142,6 +144,7 @@ impl Player {
             channel_id: None,
             last_activity: std::time::Instant::now(),
             audio_track: None,
+            show_stats: false,
         }
         .with_cx(cx)
     }
@@ -463,6 +466,7 @@ impl Player {
             if force || self.time > 0.0 {
                 store::history_progress(&v.id, self.time, self.duration);
                 self.last_progress_save = self.time;
+                crate::api::web::report_progress(&v.id, self.time, !self.paused);
             }
         }
     }
@@ -470,6 +474,9 @@ impl Player {
     /// Starts playing a video. Fetches streams, SponsorBlock segments and resumes progress.
     pub fn play(&mut self, video: VideoItem, start: Option<f64>, cx: &mut Context<Self>) {
         self.save_progress(true);
+        if let Some(prev) = &self.video {
+            crate::api::web::report_stop(&prev.id, self.time);
+        }
         let Some(mpv) = self.ensure_mpv(cx) else {
             self.video = Some(video);
             cx.notify();
@@ -499,13 +506,9 @@ impl Player {
         }
         let _ = mpv.command(&["stop"]);
         store::history_add(&video);
-        if crate::api::auth::signed_in() {
-            // keeps the account's watch history (and with it the recommendations) current
-            let vid = video.id.clone();
-            std::thread::spawn(move || {
-                let _ = crate::api::auth::mark_watched(&vid);
-            });
-        }
+        // with the browser sign-in, the video goes into the account's YouTube history
+        // and the position reported as it plays is where other devices resume
+        crate::api::web::report_start(&video.id, self.duration);
         let s = store::settings_snapshot();
         let id = video.id.clone();
         let resume = if start.is_some() {
@@ -827,6 +830,64 @@ impl Player {
         streams::quality_class(self.video_size.0 as u32, self.video_size.1 as u32)
     }
 
+    /// Playback details for the "Stats for nerds" overlay, read from mpv.
+    pub fn stats(&self) -> Vec<(&'static str, String)> {
+        let Some(m) = &self.mpv else { return Vec::new() };
+        let f = |k: &str| m.get_f64(k);
+        let st = |k: &str| m.get_string(k).filter(|s| !s.is_empty());
+        let mut out: Vec<(&'static str, String)> = Vec::new();
+        if let Some(v) = &self.video {
+            let source = self.streams.as_ref().map(|s| s.source).unwrap_or("");
+            out.push(("Video ID", if source.is_empty() { v.id.clone() } else { format!("{}  ·  via {source}", v.id) }));
+        }
+        if !self.audio_only {
+            let (w, h) = (f("video-params/w").unwrap_or(0.0), f("video-params/h").unwrap_or(0.0));
+            let fps = f("container-fps").or_else(|| f("estimated-vf-fps")).unwrap_or(0.0);
+            if w > 0.0 {
+                out.push(("Resolution", format!("{w:.0}x{h:.0}@{fps:.0}")));
+            }
+            let dropped = f("frame-drop-count").unwrap_or(0.0) + f("decoder-frame-drop-count").unwrap_or(0.0);
+            let shown = f("estimated-frame-number").unwrap_or(0.0);
+            out.push(("Frames", format!("{dropped:.0} dropped of {shown:.0}")));
+            if let Some(c) = st("video-codec") {
+                let pf = st("video-params/hw-pixelformat").or_else(|| st("video-params/pixelformat")).unwrap_or_default();
+                out.push(("Video codec", if pf.is_empty() { c } else { format!("{c}  ·  {pf}") }));
+            }
+            let hw = st("hwdec-current").filter(|s| s != "no").unwrap_or_else(|| "off (software)".into());
+            out.push(("Hardware decoding", hw));
+            let color = [st("video-params/colormatrix"), st("video-params/primaries"), st("video-params/gamma")].into_iter().flatten().collect::<Vec<_>>();
+            if !color.is_empty() {
+                out.push(("Color", color.join(" / ")));
+            }
+        }
+        if let Some(c) = st("audio-codec-name").or_else(|| st("audio-codec")) {
+            let rate = f("audio-params/samplerate").map(|r| format!("  ·  {:.1} kHz", r / 1000.0)).unwrap_or_default();
+            let ch = f("audio-params/channel-count").map(|c| format!("  ·  {c:.0} ch")).unwrap_or_default();
+            out.push(("Audio codec", format!("{c}{rate}{ch}")));
+        }
+        let kbps = |k: &str| f(k).filter(|b| *b > 0.0).map(|b| format!("{:.0} kbps", b / 1000.0));
+        let rates = [kbps("video-bitrate").map(|v| format!("video {v}")), kbps("audio-bitrate").map(|a| format!("audio {a}"))].into_iter().flatten().collect::<Vec<_>>();
+        if !rates.is_empty() {
+            out.push(("Bitrate", rates.join("  ·  ")));
+        }
+        if let Some(b) = f("demuxer-cache-duration") {
+            out.push(("Buffer health", format!("{b:.2} s")));
+        }
+        if let Some(sp) = f("cache-speed") {
+            out.push(("Connection speed", format!("{:.0} Kbps", sp * 8.0 / 1000.0)));
+        }
+        if let Some(mb) = m.get_f64("demuxer-cache-state/fw-bytes") {
+            out.push(("Buffered data", format!("{:.1} MB", mb / 1048576.0)));
+        }
+        out.push(("Volume", format!("{:.0}%{}", self.volume, if self.muted { " (muted)" } else { "" })));
+        out.push(("Speed", format!("{:.2}x", self.speed)));
+        if let Some(a) = f("avsync") {
+            out.push(("A/V sync", format!("{:+.1} ms", a * 1000.0)));
+        }
+        out.push(("Position", format!("{:.1} / {:.1} s", self.time, self.duration)));
+        out
+    }
+
     // ───── transport controls ─────
 
     pub fn toggle_pause(&mut self) {
@@ -944,6 +1005,9 @@ impl Player {
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.save_progress(true);
+        if let Some(v) = &self.video {
+            crate::api::web::report_stop(&v.id, self.time);
+        }
         self.load_serial += 1;
         if let Some(m) = &self.mpv {
             let _ = m.command(&["stop"]);

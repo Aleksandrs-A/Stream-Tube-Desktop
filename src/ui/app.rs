@@ -176,6 +176,8 @@ pub fn open_menu(pos: Point<Pixels>, items: Vec<MenuItem>, _window: &mut Window,
 
 pub enum Dialog {
     SignIn,
+    /// signing in to youtube.com in a browser, so watches reach the account
+    WebSignIn,
     SaveToPlaylist(VideoItem),
     TextPrompt { title: String, placeholder: String, on_submit: Arc<dyn Fn(String, &mut Window, &mut App)> },
     Confirm { title: String, body: String, confirm: String, on_confirm: Arc<dyn Fn(&mut Window, &mut App)> },
@@ -211,6 +213,56 @@ pub struct LoginFlow {
     code: Option<crate::api::auth::DeviceCode>,
     error: Option<String>,
     attempt: u64,
+}
+
+/// State of the browser sign-in dialog.
+#[derive(Default)]
+pub struct WebLoginFlow {
+    error: Option<String>,
+    browser: Option<String>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    attempt: u64,
+}
+
+pub fn open_web_sign_in(cx: &mut App) {
+    if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
+        app.update(cx, |a, cx| a.start_web_sign_in(cx));
+    }
+}
+
+/// Connects the browser session from a cookies.txt file the user picks.
+pub fn import_web_cookies(cx: &mut App) {
+    let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Use cookies".into()) });
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = rx.await else { return };
+        let Some(path) = paths.into_iter().next() else { return };
+        let res = blocking(move || crate::api::web::import_cookies_txt(&path)).await;
+        let _ = cx.update(|cx| {
+            if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
+                app.update(cx, |a, cx| {
+                    if matches!(a.dialog, Some(Dialog::WebSignIn)) {
+                        if let Some(c) = a.web_login.cancel.take() {
+                            c.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        a.dialog = None;
+                    }
+                    cx.notify();
+                });
+            }
+            match res {
+                Ok(name) => toast(cx, format!("Connected as {name}. What you watch now shows in your YouTube history.")),
+                Err(e) => toast(cx, crate::ui::friendly_error(&format!("{e:#}"))),
+            }
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+}
+
+pub fn disconnect_web(cx: &mut App) {
+    crate::api::web::disconnect();
+    toast(cx, "Browser sign-in disconnected");
+    cx.refresh_windows();
 }
 
 pub fn open_sign_in(_window: &mut Window, cx: &mut App) {
@@ -291,6 +343,7 @@ pub struct AppView {
     focus: FocusHandle,
     pending_watch_sync: Option<String>,
     login: LoginFlow,
+    web_login: WebLoginFlow,
     reload_page: bool,
     /// slide-over sidebar on the watch page
     drawer_open: bool,
@@ -474,6 +527,7 @@ impl AppView {
             focus,
             pending_watch_sync: None,
             login: LoginFlow::default(),
+            web_login: WebLoginFlow::default(),
             reload_page: false,
             drawer_open: false,
             subs_expanded: false,
@@ -565,6 +619,132 @@ impl AppView {
             }
         })
         .detach();
+    }
+
+    fn start_web_sign_in(&mut self, cx: &mut Context<Self>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        if let Some(c) = self.web_login.cancel.take() {
+            c.store(true, Ordering::Relaxed);
+        }
+        self.web_login.attempt += 1;
+        let attempt = self.web_login.attempt;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.web_login.cancel = Some(cancel.clone());
+        self.web_login.error = None;
+        self.web_login.browser = crate::api::web::browser_name();
+        self.dialog = Some(Dialog::WebSignIn);
+        cx.notify();
+        // closing the dialog any way at all stops the sign-in and closes the browser
+        let watch = cancel.clone();
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(std::time::Duration::from_millis(700)).await;
+            if watch.load(Ordering::Relaxed) {
+                return;
+            }
+            let open = this.update(cx, |t, _| t.web_login.attempt == attempt && matches!(t.dialog, Some(Dialog::WebSignIn))).unwrap_or(false);
+            if !open {
+                watch.store(true, Ordering::Relaxed);
+                return;
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            let c2 = cancel.clone();
+            let res = blocking(move || crate::api::web::browser_sign_in(c2)).await;
+            let _ = this.update(cx, |t, cx| {
+                if t.web_login.attempt != attempt {
+                    return;
+                }
+                t.web_login.cancel = None;
+                match res {
+                    Ok(name) => {
+                        if matches!(t.dialog, Some(Dialog::WebSignIn)) {
+                            t.dialog = None;
+                        }
+                        toast(cx, format!("Connected as {name}. What you watch now shows in your YouTube history."));
+                        cx.refresh_windows();
+                    }
+                    Err(e) => {
+                        if !cancel.load(Ordering::Relaxed) {
+                            t.web_login.error = Some(crate::ui::friendly_error(&format!("{e:#}")));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_web_sign_in(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let browser = self.web_login.browser.clone().unwrap_or_else(|| "browser".into());
+        let mut col = div().flex().flex_col().gap_4().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(icon("history").size_6().text_color(p.text))
+                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Connect your YouTube history")),
+        );
+        let cookies_link = div()
+            .id("wsi-cookies")
+            .text_xs()
+            .text_color(p.link)
+            .cursor_pointer()
+            .hover(|s| s.underline())
+            .child("Use a cookies.txt file instead")
+            .on_click(|_, _, cx| import_web_cookies(cx));
+        let cancel = pill("wsi-cancel", None, "Cancel", cx).on_click(cx.listener(|this, _, _, cx| {
+            if let Some(c) = this.web_login.cancel.take() {
+                c.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            this.dialog = None;
+            cx.notify();
+        }));
+        if let Some(err) = &self.web_login.error {
+            col = col.child(div().text_sm().text_color(p.text2).child(err.clone())).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(cookies_link)
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(cancel)
+                            .child(pill("wsi-retry", Some("refresh-cw"), "Try again", cx).on_click(cx.listener(|this, _, _, cx| this.start_web_sign_in(cx)))),
+                    ),
+            );
+        } else {
+            col = col
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .text_sm()
+                        .text_color(p.text2)
+                        .child(format!("Sign in to YouTube in the {browser} window that opened. It closes by itself when you're done."))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(p.text3)
+                                .child("Videos you watch in Stream Tube then show in your YouTube history, and your phone and TV resume them where you stopped. The window uses its own empty profile, which is deleted afterwards."),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(div().flex().items_center().gap_2().child(spinner(cx)).child(div().text_xs().text_color(p.text3).child("Waiting for sign-in…")))
+                        .child(cancel),
+                )
+                .child(cookies_link);
+        }
+        col.into_any_element()
     }
 
     fn render_sign_in(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1312,6 +1492,11 @@ impl AppView {
                 }
                 ("k", false) => {
                     pl.toggle_pause();
+                    true
+                }
+                ("i", true) => {
+                    pl.show_stats = !pl.show_stats;
+                    cx.notify();
                     true
                 }
                 ("j", false) => {
@@ -2099,10 +2284,11 @@ impl AppView {
     fn render_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = pal(cx);
         let d = self.dialog.as_ref()?;
-        let wide = matches!(d, Dialog::SignIn);
+        let wide = matches!(d, Dialog::SignIn | Dialog::WebSignIn);
         let hero = matches!(d, Dialog::Update);
         let body: AnyElement = match d {
             Dialog::SignIn => self.render_sign_in(cx),
+            Dialog::WebSignIn => self.render_web_sign_in(cx),
             Dialog::SaveToPlaylist(v) => {
                 let v = v.clone();
                 let pls = store::playlists();

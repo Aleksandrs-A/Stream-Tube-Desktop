@@ -221,6 +221,35 @@ fn row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
         .child(div().flex_none().child(control))
 }
 
+/// A setting whose control is too wide to sit beside its text: the control goes
+/// underneath, across the full width of the card.
+fn stacked_row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
+    let p = pal(cx);
+    let hidden = QUERY.with(|q| {
+        let q = q.borrow();
+        !q.is_empty() && !title.to_lowercase().contains(q.as_str()) && !desc.to_lowercase().contains(q.as_str())
+    });
+    if hidden {
+        return div();
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .py_3()
+        .border_b_1()
+        .border_color(p.border)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.text).child(title.to_string()))
+                .when(!desc.is_empty(), |d| d.child(div().text_xs().text_color(p.text2).child(desc.to_string()))),
+        )
+        .child(div().w_full().min_w_0().child(control))
+}
+
 fn switch(id: &'static str, on: bool, set: fn(&mut Settings, bool), cx: &App) -> impl IntoElement {
     let p = pal(cx);
     div()
@@ -457,6 +486,19 @@ impl SettingsPage {
         let account_desc = account.map(|a| a.name).unwrap_or_else(|| "Personal recommendations, subscriptions, likes and history".into());
         card(cx)
             .child(row("YouTube account", &account_desc, account_ctl, cx))
+            .child({
+                let (desc, ctl) = match crate::api::web::account_name().filter(|_| crate::api::web::connected()) {
+                    Some(name) => (
+                        format!("Connected as {name}. Videos you watch here show in your YouTube history and resume where you stopped on your other devices"),
+                        pill("web-out", Some("unlink"), "Disconnect", cx).on_click(|_, _, cx| crate::ui::app::disconnect_web(cx)),
+                    ),
+                    None => (
+                        "Sign in through your browser so videos you watch here show in your YouTube history and resume on your phone".to_string(),
+                        pill("web-in", Some("history"), "Connect", cx).on_click(|_, _, cx| crate::ui::app::open_web_sign_in(cx)),
+                    ),
+                };
+                row("YouTube watch history", &desc, ctl, cx)
+            })
             .child(row("Theme", "", self.choice("theme", &[("dark".to_string(), "Dark"), ("light".to_string(), "Light"), ("system".to_string(), "System")], s.theme.clone(), |s, v| s.theme = v, cx), cx))
             .child(row("Accent color", "Switches, highlights, progress and the seek bar", accent_swatches(s.accent, cx), cx))
             .child(row("Start page", "", self.choice("start", &[("home".to_string(), "Home"), ("subscriptions".to_string(), "Subscriptions"), ("history".to_string(), "History")], s.start_page.clone(), |s, v| s.start_page = v, cx), cx))
@@ -505,22 +547,35 @@ impl SettingsPage {
             .child(row("Show skip notifications", "With an “Unskip” button", switch("sbn", s.sb_notify, |s, v| s.sb_notify = v, cx), cx))
             .child(row("Minimum segment duration (seconds)", "", text_field(&self.input("sb_min"), 100., cx), cx))
             .child(row("Server", "", text_field(&self.input("sb_server"), 320., cx), cx))
-            .child(row(
+            .child(stacked_row(
                 "Private user ID",
                 "Paste the ID from the SponsorBlock extension or another app, or generate one. Keep it secret.",
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(text_field(&self.input("sb_user_id"), 260., cx))
+                    .w_full()
+                    .child({
+                        let p = pal(cx);
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .px_3()
+                            .py_1()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(p.border)
+                            .bg(p.bg)
+                            .child(Input::new(&self.input("sb_user_id")).appearance(false))
+                    })
                     .when(!s.sb_user_id.is_empty(), |d| {
                         let id = s.sb_user_id.clone();
-                        d.child(pill("sbid-copy", Some("copy"), "Copy", cx).on_click(move |_, _, cx| {
+                        d.child(pill("sbid-copy", Some("copy"), "Copy", cx).flex_none().on_click(move |_, _, cx| {
                             copy_to_clipboard(id.clone(), cx);
                             toast(cx, "Private ID copied");
                         }))
                     })
-                    .child(pill("sbid-gen", Some("key-round"), "Generate", cx).on_click(cx.listener(|this, _, window, cx| {
+                    .child(pill("sbid-gen", Some("key-round"), "Generate", cx).flex_none().on_click(cx.listener(|this, _, window, cx| {
                         let id = crate::api::services::new_sb_user_id();
                         store::update_settings(|s| s.sb_user_id = id.clone());
                         this.input("sb_user_id").update(cx, |i, cx| i.set_value(id, window, cx));
@@ -731,7 +786,7 @@ impl SettingsPage {
     fn privacy(&self, cx: &mut Context<Self>) -> Div {
         let s = store::settings_snapshot();
         card(cx)
-            .child(row("Save watch history", "Stored only on this computer", switch("he2", s.history_enabled, |s, v| s.history_enabled = v, cx), cx))
+            .child(row("Save watch history", "Kept on this computer, and in your YouTube history when connected in General", switch("he2", s.history_enabled, |s, v| s.history_enabled = v, cx), cx))
             .child(row("Save search history", "", switch("se", s.search_history_enabled, |s, v| s.search_history_enabled = v, cx), cx))
             .child(row("Clear search history", "", pill("csh", Some("trash-2"), "Clear", cx).on_click(|_, _, cx| {
                 store::search_history_clear();

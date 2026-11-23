@@ -311,6 +311,18 @@ impl Render for PlayerView {
                         }
                     }),
                 )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                        if this.mini {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        this.menu = None;
+                        let items = context_items(&this.player, cx);
+                        crate::ui::app::open_menu(ev.position, items, window, cx);
+                    }),
+                )
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     // the release that ends a press-and-hold isn't a click
                     if std::mem::take(&mut this.press_boosted) {
@@ -478,6 +490,9 @@ impl Render for PlayerView {
             );
         }
 
+        if self.player.read(cx).show_stats {
+            root = root.child(self.render_stats(cx));
+        }
         if show {
             root = root.child(self.render_controls(time, duration, ui, window, cx));
         }
@@ -487,6 +502,47 @@ impl Render for PlayerView {
         let _ = p;
         root.into_any_element()
     }
+}
+
+/// Items of the menu shown on right-clicking the video.
+fn context_items(player: &Entity<Player>, cx: &App) -> Vec<crate::ui::app::MenuItem> {
+    use crate::ui::app::MenuItem;
+    let pl = player.read(cx);
+    let id = pl.video.as_ref().map(|v| v.id.clone()).unwrap_or_default();
+    let t = pl.time.max(0.0) as u64;
+    let looping = pl.loop_video;
+    let stats = pl.show_stats;
+    let (p1, p2, p3, p4) = (player.clone(), player.clone(), player.clone(), player.clone());
+    let (id1, id2) = (id.clone(), id);
+    vec![
+        MenuItem::new("repeat", if looping { "Loop: on" } else { "Loop: off" }, move |_, cx| {
+            p1.update(cx, |p, cx| {
+                p.set_loop(!looping);
+                cx.notify()
+            })
+        }),
+        MenuItem::new("link", "Copy video URL", move |_, cx| {
+            crate::ui::copy_to_clipboard(format!("https://youtu.be/{id1}"), cx);
+            crate::ui::toast(cx, "Link copied");
+        }),
+        MenuItem::new("clock", "Copy video URL at current time", move |_, cx| {
+            crate::ui::copy_to_clipboard(format!("https://youtu.be/{id2}?t={t}"), cx);
+            crate::ui::toast(cx, "Link copied");
+        }),
+        MenuItem::new("camera", "Screenshot", move |_, cx| p2.update(cx, |p, cx| p.screenshot(cx))),
+        MenuItem::new("activity", if stats { "Hide stats for nerds" } else { "Stats for nerds" }, move |_, cx| {
+            p3.update(cx, |p, cx| {
+                p.show_stats = !stats;
+                cx.notify()
+            })
+        }),
+    ]
+    .into_iter()
+    .chain(std::iter::once(MenuItem::new("pause", "Play / pause", move |_, cx| p4.update(cx, |p, cx| {
+        p.toggle_pause();
+        cx.notify()
+    }))))
+    .collect()
 }
 
 fn navigate_to_current(this: &mut PlayerView, window: &mut Window, cx: &mut Context<PlayerView>) {
@@ -989,6 +1045,61 @@ impl PlayerView {
             )
     }
 
+    /// The "Stats for nerds" panel; refreshes itself every second while open.
+    fn render_stats(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let rows = self.player.read(cx).stats();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(1000)).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+        let player = self.player.clone();
+        div()
+            .id("stats")
+            .absolute()
+            .top_3()
+            .left_3()
+            .max_w(px(470.))
+            .p_3()
+            .pr_8()
+            .rounded_lg()
+            .bg(hsla(0., 0., 0., 0.72))
+            .text_xs()
+            .text_color(white())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .id("stats-close")
+                    .absolute()
+                    .top_2()
+                    .right_2()
+                    .size_5()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hsla(0., 0., 1., 0.15)))
+                    .child(icon("x").size_4().text_color(white()))
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        player.update(cx, |p, cx| {
+                            p.show_stats = false;
+                            cx.notify()
+                        })
+                    }),
+            )
+            .children(rows.into_iter().map(|(k, v)| {
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(div().w(px(130.)).flex_none().text_right().font_weight(FontWeight::SEMIBOLD).child(k))
+                    .child(div().flex_1().text_color(hsla(0., 0., 1., 0.85)).child(v))
+            }))
+            .with_animation("stats-in", Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
+    }
+
     fn render_menu(&mut self, menu: Menu, cx: &mut Context<Self>) -> impl IntoElement {
         let pl = self.player.read(cx);
         let row = |id: SharedString, icon_name: Option<&str>, label: String, value: Option<String>, active: bool| {
@@ -1083,6 +1194,15 @@ impl PlayerView {
                     .child(
                         row("m-l".into(), Some("repeat"), "Loop".into(), Some(if looping { "On".into() } else { "Off".into() }), false)
                             .on_click(cx.listener(move |t, _, _, cx| t.player.update(cx, |p, cx| { p.set_loop(!looping); cx.notify() }))),
+                    )
+                    .child(
+                        row("m-stats".into(), Some("activity"), "Stats for nerds".into(), None, false).on_click(cx.listener(|t, _, _, cx| {
+                            t.menu = None;
+                            t.player.update(cx, |p, cx| {
+                                p.show_stats = !p.show_stats;
+                                cx.notify()
+                            })
+                        })),
                     )
                     .child(
                         row("m-shot".into(), Some("camera"), "Screenshot".into(), None, false)

@@ -516,27 +516,6 @@ pub fn subscribe(channel_id: &str, on: bool) -> Result<()> {
     Ok(())
 }
 
-/// Adds the video to the account's YouTube watch history, which is what keeps the
-/// home recommendations personal.
-pub fn mark_watched(video_id: &str) -> Result<()> {
-    let token = access_token().ok_or_else(|| anyhow!("not signed in"))?;
-    let r = tv_call("player", json!({ "videoId": video_id, "racyCheckOk": true, "contentCheckOk": true }))?;
-    let base = r
-        .pointer("/playbackTracking/videostatsPlaybackUrl/baseUrl")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("no playback tracking url"))?;
-    let cpn: String = {
-        use rand::Rng;
-        const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-        let mut rng = rand::rng();
-        (0..16).map(|_| A[rng.random_range(0..A.len())] as char).collect()
-    };
-    let url = format!("{base}&ver=2&cpn={cpn}");
-    let auth = format!("Bearer {token}");
-    http::get_bytes(&url, &[("Authorization", &auth), ("User-Agent", TV_UA)])?;
-    Ok(())
-}
-
 /// The signed-in account's playlists (own and saved), incl. Watch later and Liked.
 pub fn my_playlists() -> Result<Vec<PlaylistItem>> {
     let r = tv_call("browse", json!({ "browseId": "FEplaylist_aggregation" }))?;
