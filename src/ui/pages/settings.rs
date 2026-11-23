@@ -206,6 +206,7 @@ fn row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
         .items_center()
         .justify_between()
         .gap_6()
+        .min_w_0()
         .py_3()
         .border_b_1()
         .border_color(p.border)
@@ -214,6 +215,8 @@ fn row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
                 .flex()
                 .flex_col()
                 .flex_1()
+                // lets a long description wrap instead of widening the page
+                .min_w_0()
                 .gap_0p5()
                 .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.text).child(title.to_string()))
                 .when(!desc.is_empty(), |d| d.child(div().text_xs().text_color(p.text2).child(desc.to_string()))),
@@ -1033,7 +1036,7 @@ impl Render for SettingsPage {
             QUERY.with(|q| q.borrow_mut().clear());
             return page_scroll("settings-scroll", &self.scroll).child(
                 div().flex().justify_center().gap_8().px_6().pt_6().pb_24().child(nav).child(
-                    div().flex().flex_col().gap_4().w(px(860.)).child(section_title(&format!("Results for “{query}”"), cx).text_2xl()).child(all),
+                    div().flex().flex_col().gap_4().w(px(860.)).min_w_0().child(section_title(&format!("Results for “{query}”"), cx).text_2xl()).child(all),
                 ),
             );
         }
@@ -1059,6 +1062,7 @@ impl Render for SettingsPage {
                     .flex_col()
                     .gap_4()
                     .w(px(860.))
+                    .min_w_0()
                     .child(section_title(title, cx).text_2xl())
                     .child(content),
             ),

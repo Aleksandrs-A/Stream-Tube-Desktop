@@ -129,6 +129,9 @@ the GPU like the browser does. Results depend on the video, resolution and hardw
     <td align="center">Settings</td>
     <td align="center">SponsorBlock and DeArrow</td>
   </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/screenshots/stats.png" alt="Stats for nerds" width="60%"><br>Stats for nerds</td>
+  </tr>
 </table>
 
 ## Install
