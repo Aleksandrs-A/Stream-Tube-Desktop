@@ -263,7 +263,7 @@ fn open_link(url: &str, window: &mut Window, cx: &mut App) {
         };
         crate::ui::app::navigate(route, window, cx);
     } else {
-        let _ = open::that(url);
+        crate::ui::open_web(url);
     }
 }
 

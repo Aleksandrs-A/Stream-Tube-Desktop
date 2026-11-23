@@ -173,6 +173,20 @@ pub struct Toasts {
 
 impl Global for Toasts {}
 
+/// Opens a web link in the browser. Links from comments, descriptions and release
+/// notes are untrusted, so only http(s) goes to the system: never files, network
+/// shares or other programs' URL schemes.
+pub fn open_web(url: &str) {
+    if is_web_url(url) {
+        let _ = open::that(url.trim());
+    }
+}
+
+pub fn is_web_url(url: &str) -> bool {
+    let u = url.trim().to_ascii_lowercase();
+    (u.starts_with("https://") || u.starts_with("http://")) && !u.contains(char::is_whitespace)
+}
+
 pub fn toast(cx: &mut App, text: impl Into<SharedString>) {
     toast_with_action(cx, text, None);
 }

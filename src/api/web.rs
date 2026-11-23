@@ -426,6 +426,10 @@ impl Watch {
     /// youtube.com's own player adds. Fields already in the base URL are replaced,
     /// never repeated.
     fn get(&self, base: &str, fields: &[(&str, String)]) -> Result<()> {
+        // the ping carries the sign-in cookies: only ever to YouTube itself
+        if !is_youtube_https(base) {
+            return Err(anyhow!("unexpected stats host"));
+        }
         let rt = self.started.elapsed().as_secs_f64();
         let mut add: Vec<(&str, String)> = vec![
             ("ver", "2".into()),
@@ -568,5 +572,28 @@ pub fn report_progress(id: &str, t: f64, playing: bool) {
 pub fn report_stop(id: &str, t: f64) {
     if connected() {
         let _ = reporter().lock().send(Event::Stop { id: id.to_string(), t });
+    }
+}
+
+/// `https://youtube.com/...` or `https://<anything>.youtube.com/...`, nothing else.
+fn is_youtube_https(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else { return false };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // no user info or port tricks ("youtube.com@evil.example")
+    !host.contains(['@', ':']) && (host == "youtube.com" || host.ends_with(".youtube.com"))
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::is_youtube_https;
+
+    #[::core::prelude::v1::test]
+    fn only_youtube() {
+        assert!(is_youtube_https("https://s.youtube.com/api/stats/playback?x=1"));
+        assert!(is_youtube_https("https://www.youtube.com/api/stats/watchtime"));
+        assert!(!is_youtube_https("http://s.youtube.com/api"));
+        assert!(!is_youtube_https("https://youtube.com.evil.example/api"));
+        assert!(!is_youtube_https("https://www.youtube.com@evil.example/api"));
+        assert!(!is_youtube_https("https://evilyoutube.com/api"));
     }
 }

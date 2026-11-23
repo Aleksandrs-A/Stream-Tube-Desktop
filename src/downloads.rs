@@ -664,7 +664,31 @@ pub fn load_history(cx: &mut App) {
 static FFMPEG_FETCHING: AtomicBool = AtomicBool::new(false);
 static PENDING: Mutex<Vec<(VideoItem, Option<String>)>> = Mutex::new(Vec::new());
 
-const FFMPEG_URL: &str = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip";
+/// yt-dlp's FFmpeg builds: (repository, release, file)
+const FFMPEG_ASSET: (&str, &str, &str) = ("yt-dlp/FFmpeg-Builds", "tags/latest", "ffmpeg-master-latest-win64-gpl-shared.zip");
+
+/// Downloads a file from a GitHub release into `dest`, and keeps it only if it
+/// matches the SHA-256 GitHub lists for it. `release` is "latest" or "tags/<tag>".
+fn download_github_asset((repo, release, name): (&str, &str, &str), dest: &std::path::Path) -> anyhow::Result<()> {
+    let rel = crate::api::http::get_json(&format!("https://api.github.com/repos/{repo}/releases/{release}"))?;
+    let asset = rel
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .and_then(|a| a.iter().find(|x| x.get("name").and_then(|n| n.as_str()) == Some(name)))
+        .ok_or_else(|| anyhow::anyhow!("{name} is not in the latest release"))?;
+    let url = asset.get("browser_download_url").and_then(|u| u.as_str()).filter(|u| u.starts_with(&format!("https://github.com/{repo}/releases/download/")));
+    let sha = asset.get("digest").and_then(|d| d.as_str()).and_then(|d| d.strip_prefix("sha256:")).map(str::to_ascii_lowercase);
+    let (Some(url), Some(sha)) = (url, sha) else { anyhow::bail!("GitHub gave no checksum for {name}") };
+    {
+        let mut f = std::fs::File::create(dest)?;
+        crate::api::http::download_to(url, &mut f, |_, _| true)?;
+    }
+    if crate::updater::file_sha256(dest)? != sha {
+        let _ = std::fs::remove_file(dest);
+        anyhow::bail!("the downloaded {name} doesn't match its checksum");
+    }
+    Ok(())
+}
 
 fn ffmpeg_dir() -> std::path::PathBuf {
     store::data_dir().join("ffmpeg")
@@ -708,10 +732,7 @@ pub fn fetch_ffmpeg(cx: &mut App) {
             let _ = std::fs::remove_dir_all(&tmp);
             std::fs::create_dir_all(&tmp)?;
             let zip = tmp.join("ffmpeg.zip");
-            {
-                let mut f = std::fs::File::create(&zip)?;
-                crate::api::http::download_to(FFMPEG_URL, &mut f, |_, _| true)?;
-            }
+            download_github_asset(FFMPEG_ASSET, &zip)?;
             // Windows 10+ ships bsdtar, which reads zip files
             let mut c = Command::new("tar");
             c.arg("-xf").arg(&zip).arg("-C").arg(&tmp);
@@ -754,11 +775,7 @@ pub fn fetch_ffmpeg(cx: &mut App) {
 
 static YTDLP_FETCHING: AtomicBool = AtomicBool::new(false);
 
-const YTDLP_URL: &str = if cfg!(windows) {
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-} else {
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
-};
+const YTDLP_ASSET: (&str, &str, &str) = ("yt-dlp/yt-dlp", "latest", if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp_linux" });
 
 /// Downloads yt-dlp into the data folder, then starts the downloads waiting for it.
 pub fn fetch_ytdlp(cx: &mut App) {
@@ -771,10 +788,7 @@ pub fn fetch_ytdlp(cx: &mut App) {
             let name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
             let dest = store::data_dir().join(name);
             let tmp = store::data_dir().join(format!("{name}.part"));
-            {
-                let mut f = std::fs::File::create(&tmp)?;
-                crate::api::http::download_to(YTDLP_URL, &mut f, |_, _| true)?;
-            }
+            download_github_asset(YTDLP_ASSET, &tmp)?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -804,4 +818,17 @@ pub fn fetch_ytdlp(cx: &mut App) {
         });
     })
     .detach();
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    /// network: cargo test --release verified_download -- --ignored
+    #[::core::prelude::v1::test]
+    #[ignore]
+    fn verified_download() {
+        let p = std::env::temp_dir().join("st-ytdlp-test");
+        super::download_github_asset(super::YTDLP_ASSET, &p).unwrap();
+        assert!(std::fs::metadata(&p).unwrap().len() > 1_000_000);
+        let _ = std::fs::remove_file(&p);
+    }
 }

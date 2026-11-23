@@ -111,7 +111,7 @@ fn pick_asset(assets: &[Value]) -> Option<Asset> {
 }
 
 /// SHA-256 of a file, as lowercase hex.
-fn file_sha256(path: &std::path::Path) -> Result<String> {
+pub(crate) fn file_sha256(path: &std::path::Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
     let mut f = std::fs::File::open(path)?;

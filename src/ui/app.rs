@@ -2272,7 +2272,7 @@ impl AppView {
                     .text_sm()
                     .text_color(p.text)
                     .child(gpui_kit::base::TextView::markdown("upd-notes-md", notes).on_link_click(|url, _, _, _| {
-                        let _ = open::that(url.as_ref() as &str);
+                        open_web(url.as_ref());
                     })),
             );
         }
