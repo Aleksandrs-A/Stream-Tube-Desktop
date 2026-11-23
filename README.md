@@ -16,6 +16,14 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
 </p>
 
+> [!WARNING]
+> **Community branch — not maintained or tested by the project owner.**
+> The macOS (Apple Silicon) support on this branch comes from an outside
+> contribution ([pull request #22](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/pull/22)).
+> It has not been built, run or reviewed on a Mac by the maintainer, it is not part
+> of any official release, and it may lag behind `main`. Use it at your own risk.
+> Official builds are Windows and Linux only.
+
 <p align="center">
   <img src="docs/screenshots/home.png" alt="Home feed" width="900">
 </p>
