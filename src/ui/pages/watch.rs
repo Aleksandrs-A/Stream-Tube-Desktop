@@ -473,7 +473,7 @@ impl WatchPage {
         let looping = player(cx).read(cx).loop_video;
         if next.is_none() && !looping && s.exit_fullscreen_at_end && cx.global::<UiState>().fullscreen {
             if let Some(w) = cx.active_window() {
-                let _ = w.update(cx, |_, window, cx| crate::ui::app::toggle_fullscreen(window, cx));
+                let _ = w.update(cx, |_, window, cx| crate::ui::app::exit_fullscreen(window, cx));
             }
         }
         if !s.autoplay_next {

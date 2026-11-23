@@ -1124,6 +1124,11 @@ impl PlayerView {
                     cx.refresh_windows();
                 }))
             })
+            .when(!self.pip && !narrow, |d| {
+                d.child(ctl_btn("c-wfs", if ui.windowed { "shrink" } else { "expand" }).on_click(|_, window, cx| {
+                    crate::ui::app::toggle_windowed_fullscreen(window, cx);
+                }))
+            })
             .when(!self.pip, |d| {
                 d.child(ctl_btn("c-fs", if ui.fullscreen { "minimize" } else { "maximize" }).on_click(|_, window, cx| {
                     crate::ui::app::toggle_fullscreen(window, cx);
