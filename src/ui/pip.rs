@@ -141,3 +141,6 @@ impl Render for PipView {
             )
     }
 }
+
+#[cfg(test)]
+mod tests;

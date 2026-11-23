@@ -11,6 +11,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Menu {
     Main,
