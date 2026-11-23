@@ -40,6 +40,10 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 **Watching**
 - Home, Shorts, Subscriptions, Explore categories, channels (including their courses and shows), playlists and search, with search suggestions and your recent searches
 - A personal Home without an account: "For you" recommends videos related to what you've watched and searched in the app, mixed with new uploads from your subscriptions. Signed in, Home is your own YouTube Home feed
+- Tabs: Ctrl+click anything (or *Open in new tab* in a video's menu) to open it in the background, and switch with Ctrl+Tab, Ctrl+1…9 or a click. Ctrl+T opens a new tab, Ctrl+W or a middle click closes one
+- Videos made for kids (YouTube Kids) play and download like any other video
+- Old video annotations are back: notes, speech bubbles and clickable links from YouTube's annotation archive, drawn over the video where they used to be (turn them off in *Settings → Player* or from the player's gear menu)
+- Arabic, Hebrew and other right-to-left text is shown in the right order
 - Shorts follow your account's recommendations when you're signed in, or start from the Shorts you watched last
 - libmpv player with hardware decoding, codec preference (AV1, VP9 or H.264), 360p up to 4K, enhanced bitrate, speed control (remembered per channel if you want), captions you can style (font, colour, opacity, background and edge, with a live preview), chapters and seek-bar preview thumbnails
 - Resumes where you left off, remembers your last quality, autoplays the next video or loops, and plays whole playlists as a queue
@@ -83,6 +87,11 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 **Downloads**
 - Download video or audio in any quality through yt-dlp, with SponsorBlock chapters, from a download manager with progress
 - Without yt-dlp it falls back to the built-in downloader (360p/720p or audio)
+- yt-dlp and FFmpeg can be fetched from inside the app, on Windows and Linux (*Settings → Downloads*), so nothing has to be installed by hand
+
+**Open from the browser**
+- The [Stream Tube userscript](userscript/stream-tube.user.js) adds an *Open in Stream Tube* button to youtube.com (or press Alt+S). The video continues in the app from where you were. Install it with Tampermonkey or Violentmonkey; it can also send every video to the app by itself
+- `streamtube://open?url=<YouTube link>` links open the app, which is set up when you install it (or the first time the portable build runs)
 
 **Network**
 - A proxy setting (HTTP or SOCKS) that covers browsing, playback, thumbnails, downloads and sign-in
@@ -149,26 +158,26 @@ This is an early alpha, so expect rough edges.
 your user only, so no administrator prompt, and the app updates itself when a new
 release comes out (*Settings → About*).
 To run it without installing, unzip `StreamTube-<version>-windows-x64.zip` and run
-`streamtube.exe`.
+`streamtube.exe`. It doesn't need the Visual C++ runtime.
 
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.5.1-alpha_amd64.deb
+sudo apt install ./streamtube_0.6.0-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.5.1-alpha.x86_64.rpm
+sudo dnf install ./streamtube-0.6.0-alpha.x86_64.rpm
 ```
 
 **Any Linux (x86_64), nothing to install**: download the AppImage, make it executable
 and run it. libmpv is inside, so video plays without installing anything else:
 
 ```sh
-chmod +x StreamTube-0.5.1-alpha-x86_64.AppImage
-./StreamTube-0.5.1-alpha-x86_64.AppImage
+chmod +x StreamTube-0.6.0-alpha-x86_64.AppImage
+./StreamTube-0.6.0-alpha-x86_64.AppImage
 ```
 
 **Other Linux (x86_64), installed for your user**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
@@ -181,8 +190,9 @@ sudo dnf install mpv-libs     # Fedora
 sudo pacman -S mpv            # Arch
 ```
 
-Downloads above 360p need yt-dlp and FFmpeg. On Windows the app offers to fetch
-both the first time you need them. On Linux, install them with your package manager.
+Downloads above 360p need yt-dlp and FFmpeg. The app offers to fetch both the first
+time you need them, on Windows and Linux, or get them any time from *Settings → Downloads*.
+You can also install them with your package manager instead.
 
 ### Verifying a download
 
@@ -192,7 +202,7 @@ and each file has a signed build provenance attestation that ties it to the work
 run that built it. With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify StreamTube-0.5.1-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
+gh attestation verify StreamTube-0.6.0-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
 ```
 
 Releases are immutable once published, so their files can't be swapped afterwards.
@@ -224,7 +234,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.5.1-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.6.0-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in
@@ -266,8 +276,9 @@ what makes a PR easy to merge, and what won't be accepted.
 Stream Tube leans on a lot of other people's work:
 [mpv](https://mpv.io), [yt-dlp](https://github.com/yt-dlp/yt-dlp),
 [SponsorBlock](https://sponsor.ajay.app), [DeArrow](https://dearrow.ajay.app),
-[Return YouTube Dislike](https://returnyoutubedislike.com) and
-[GPUI](https://www.gpui.rs).
+[Return YouTube Dislike](https://returnyoutubedislike.com),
+[GPUI](https://www.gpui.rs), [FFmpeg](https://ffmpeg.org) and the annotation archive saved by
+[Archive Team](https://wiki.archiveteam.org/index.php/YouTube/Annotations).
 
 It's an independent project and isn't affiliated with or endorsed by YouTube or Google.
 

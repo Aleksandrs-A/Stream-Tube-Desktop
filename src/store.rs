@@ -120,6 +120,8 @@ pub struct Settings {
     pub original_audio: bool,
     /// play a muted preview when the pointer rests on a thumbnail
     pub hover_preview: bool,
+    /// show archived annotations (notes and links YouTube removed in 2019)
+    pub annotations: bool,
 }
 
 impl Default for Settings {
@@ -162,6 +164,7 @@ impl Default for Settings {
             sb_actions: sb,
             sb_min_duration: 0.0,
             sb_notify: true,
+            annotations: true,
             dearrow_titles: false,
             dearrow_thumbnails: false,
             ryd: true,

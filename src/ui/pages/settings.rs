@@ -41,6 +41,8 @@ pub struct SettingsPage {
     inputs: Vec<(&'static str, Entity<InputState>)>,
     keyword: Entity<InputState>,
     ytdlp_version: Option<String>,
+    /// whether FFmpeg was found (None until checked)
+    ffmpeg_found: Option<bool>,
     /// open dropdown (by id) and when the last one closed (an outside click closes it
     /// right before the button's own click would reopen it)
     open_dd: Option<&'static str>,
@@ -119,6 +121,7 @@ impl SettingsPage {
             inputs,
             keyword,
             ytdlp_version: None,
+            ffmpeg_found: None,
             open_dd: None,
             dd_closed_at: std::time::Instant::now() - std::time::Duration::from_secs(5),
             search,
@@ -137,8 +140,10 @@ impl SettingsPage {
                 })
             })
             .await;
+            let ff = blocking(|| crate::downloads::ffmpeg_path().is_some()).await;
             let _ = this.update(cx, |t, cx| {
                 t.ytdlp_version = v;
+                t.ffmpeg_found = Some(ff);
                 cx.notify();
             });
         })
@@ -512,6 +517,12 @@ impl SettingsPage {
             .child(row("Jump ahead", "Button to skip to the most replayed part", switch("jump", s.jump_ahead, |s, v| s.jump_ahead = v, cx), cx))
             .child(row("Enhanced bitrate", "Picks the highest-bitrate stream YouTube offers for the chosen quality", switch("ebr", s.enhanced_bitrate, |s, v| s.enhanced_bitrate = v, cx), cx))
             .child(row("Ambient mode", "Soft glow of the video's colors around the player", switch("amb", s.ambient_mode, |s, v| s.ambient_mode = v, cx), cx))
+            .child(row(
+                "Annotations",
+                "Notes and links on older videos, restored from the Annotations Restored archive",
+                switch("ann", s.annotations, |s, v| s.annotations = v, cx),
+                cx,
+            ))
             .child(row("Force original audio", "Play the original language instead of auto-dubbed tracks", switch("orig", s.original_audio, |s, v| s.original_audio = v, cx), cx))
     }
 
@@ -963,6 +974,37 @@ impl SettingsPage {
                 "Default format",
                 "",
                 self.choice("df", &crate::downloads::FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect::<Vec<_>>(), s.download_format.clone(), |s, v| s.download_format = v, cx),
+                cx,
+            ))
+            .child(row(
+                "yt-dlp",
+                &match &self.ytdlp_version {
+                    Some(v) => format!("Installed ({v}). Downloads in every quality, with SponsorBlock chapters"),
+                    None => "Needed for downloads above 360p. Stream Tube can fetch it for you".into(),
+                },
+                if self.ytdlp_version.is_some() {
+                    div().into_any_element()
+                } else {
+                    pill("get-ytdlp", Some("download"), &format!("Get yt-dlp ({})", crate::downloads::YTDLP_SIZE), cx)
+                        .on_click(|_, _, cx| crate::downloads::fetch_ytdlp(cx))
+                        .into_any_element()
+                },
+                cx,
+            ))
+            .child(row(
+                "FFmpeg",
+                match self.ffmpeg_found {
+                    Some(true) => "Installed. Joins the video and audio of downloads above 360p",
+                    Some(false) => "Needed to join video and audio above 360p. Stream Tube can fetch it for you",
+                    None => "",
+                },
+                if self.ffmpeg_found == Some(false) {
+                    pill("get-ffmpeg", Some("download"), &format!("Get FFmpeg ({})", crate::downloads::FFMPEG_SIZE), cx)
+                        .on_click(|_, _, cx| crate::downloads::fetch_ffmpeg(cx))
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                },
                 cx,
             ))
     }

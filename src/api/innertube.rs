@@ -44,6 +44,9 @@ fn walk_items(v: &Value, page: &mut Page) {
     match v {
         Value::Object(m) => {
             for (k, c) in m {
+                if AD_RENDERERS.contains(&k.as_str()) {
+                    continue;
+                }
                 match k.as_str() {
                     "videoRenderer" | "compactVideoRenderer" | "gridVideoRenderer" | "playlistVideoRenderer"
                     | "playlistPanelVideoRenderer" | "videoWithContextRenderer" => {
@@ -113,6 +116,9 @@ pub fn continuation_token(c: &Value) -> Option<String> {
 
 /// TV client tiles (home / subscriptions feeds of a signed-in account).
 pub(crate) fn parse_tile(t: &Value) -> Option<VideoItem> {
+    if is_ad(t) {
+        return None;
+    }
     let ctype = t.get("contentType").and_then(Value::as_str).unwrap_or("");
     if !ctype.is_empty() && ctype != "TILE_CONTENT_TYPE_VIDEO" {
         return None;
@@ -169,6 +175,9 @@ pub(crate) fn parse_tile(t: &Value) -> Option<VideoItem> {
 }
 
 fn parse_video_renderer(r: &Value) -> Option<VideoItem> {
+    if is_ad(r) {
+        return None;
+    }
     let id = r.get("videoId")?.as_str()?.to_string();
     let title = opt_text(r.get("title")).or_else(|| opt_text(r.get("headline"))).unwrap_or_default();
     let owner = r
@@ -271,6 +280,9 @@ fn parse_shorts_lockup(r: &Value) -> Option<VideoItem> {
 }
 
 fn parse_lockup(l: &Value) -> Option<Item> {
+    if is_ad(l) {
+        return None;
+    }
     let id = l.get("contentId")?.as_str()?.to_string();
     let ctype = l.get("contentType").and_then(Value::as_str).unwrap_or("");
     let meta = l.pointer("/metadata/lockupMetadataViewModel")?;
@@ -1247,6 +1259,35 @@ pub fn explore(channel_id: &str) -> Result<Page> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lockup(id: &str, title: &str) -> Value {
+        json!({ "lockupViewModel": {
+            "contentId": id, "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+            "metadata": { "lockupMetadataViewModel": { "title": { "content": title } } }
+        }})
+    }
+
+    #[test]
+    fn ads_are_skipped() {
+        let mut ad_lockup = lockup("adVid000001", "Buy now");
+        ad_lockup["lockupViewModel"]["rendererContext"] = json!({ "loggingContext": { "adClientParams": { "x": 1 } } });
+        let feed = json!({ "contents": [
+            { "richItemRenderer": { "content": lockup("realVid0001", "A real video") } },
+            // the home feed's in-feed ad slot
+            { "richItemRenderer": { "content": { "adSlotRenderer": { "fulfillmentContent": { "fulfilledLayout": {
+                "inFeedAdLayoutRenderer": { "renderingContent": lockup("adVid000002", "OLX") } } } } } } },
+            // an ad drawn as a plain lockup, recognisable only by its ad fields
+            { "richItemRenderer": { "content": ad_lockup } },
+            // search: promoted video and a regular one marked with an ad badge
+            { "searchPyvRenderer": { "ads": [{ "videoRenderer": { "videoId": "adVid000003", "title": { "simpleText": "Ad" } } }] } },
+            { "videoRenderer": { "videoId": "adVid000004", "title": { "simpleText": "Sponsored" },
+                "badges": [{ "metadataBadgeRenderer": { "style": "BADGE_STYLE_TYPE_AD", "label": "Ad" } }] } },
+            { "videoRenderer": { "videoId": "realVid0002", "title": { "simpleText": "Another real one" },
+                "badges": [{ "metadataBadgeRenderer": { "style": "BADGE_STYLE_TYPE_SIMPLE", "label": "New" } }] } },
+        ]});
+        let ids: Vec<String> = collect_items(&feed).items.iter().filter_map(|i| i.as_video().map(|v| v.id.clone())).collect();
+        assert_eq!(ids, vec!["realVid0001", "realVid0002"]);
+    }
 
     #[test]
     fn filter_encoding() {

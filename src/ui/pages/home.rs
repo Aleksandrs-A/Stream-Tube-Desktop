@@ -30,6 +30,40 @@ fn freshen(items: Vec<Item>) -> Vec<Item> {
     fresh
 }
 
+/// Where the home feed comes from, so a cached feed is only shown for the same source.
+fn feed_source() -> &'static str {
+    if crate::api::web::connected() {
+        "web"
+    } else if crate::api::auth::signed_in() {
+        "account"
+    } else {
+        "local"
+    }
+}
+
+/// The home feed from the last session, shown at once when the app starts while
+/// the new one loads. Kept for three days.
+fn cached_home() -> Option<Vec<Item>> {
+    let v: serde_json::Value = serde_json::from_str(&store::kv_get("home_cache")?).ok()?;
+    if v.get("source")?.as_str()? != feed_source() || crate::api::json::now() - v.get("at")?.as_i64()? > 3 * 24 * 3600 {
+        return None;
+    }
+    let items: Vec<Item> = serde_json::from_value(v.get("items")?.clone()).ok()?;
+    (!items.is_empty()).then_some(items)
+}
+
+fn save_home(items: &[Item]) {
+    let v = serde_json::json!({
+        "source": feed_source(),
+        "at": crate::api::json::now(),
+        "items": items.iter().take(60).collect::<Vec<_>>(),
+    });
+    store::kv_set("home_cache", &v.to_string());
+}
+
+/// Only the first home load of a session starts from the cache.
+static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub struct HomePage {
     chip: usize,
     items: Load<Vec<Item>>,
@@ -52,6 +86,14 @@ impl HomePage {
         self.serial += 1;
         let serial = self.serial;
         let chip = self.chip;
+        // at startup, show the last feed right away instead of a spinner
+        let mut from_cache = false;
+        if chip == 0 && !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            if let Some(items) = cached_home() {
+                self.items = Load::Ready(items);
+                from_cache = true;
+            }
+        }
         cx.spawn(async move |this, cx| {
             let res = blocking(move || -> anyhow::Result<(Vec<Item>, Option<String>)> {
                 if chip == 0 && crate::api::web::connected() {
@@ -172,11 +214,20 @@ impl HomePage {
                 if this.serial != serial {
                     return;
                 }
+                crate::perf::mark("home feed fetched");
                 match res {
                     Ok((items, cont)) => {
-                        this.items = Load::Ready(items);
+                        if chip == 0 && !items.is_empty() {
+                            save_home(&items);
+                        }
+                        // the cached feed stays if the user is already scrolling through it
+                        let scrolled = this.scroll.offset().y < px(-40.);
+                        if !(from_cache && scrolled) {
+                            this.items = Load::Ready(items);
+                        }
                         this.continuation = cont;
                     }
+                    Err(_) if from_cache => {}
                     Err(e) => this.items = Load::Error(e.to_string()),
                 }
                 cx.notify();

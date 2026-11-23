@@ -59,6 +59,51 @@ pub fn find_all<'a>(v: &'a Value, key: &str, out: &mut Vec<&'a Value>) {
     }
 }
 
+/// Renderers that only ever hold ads or paid promotions. Their contents look like
+/// ordinary videos (an ad's own video, usually unlisted and unplayable), so the
+/// whole subtree is skipped.
+pub const AD_RENDERERS: &[&str] = &[
+    "adSlotRenderer",
+    "inFeedAdLayoutRenderer",
+    "adSlotAndLayoutMetadata",
+    "promotedVideoRenderer",
+    "compactPromotedVideoRenderer",
+    "promotedSparklesWebRenderer",
+    "promotedSparklesTextSearchRenderer",
+    "searchPyvRenderer",
+    "bannerPromoRenderer",
+    "statementBannerRenderer",
+    "brandVideoShelfRenderer",
+    "brandVideoSingletonRenderer",
+    "videoMastheadAdV3Renderer",
+    "mastheadAdV4Renderer",
+    "primetimePromoRenderer",
+    "playerLegacyDesktopWatchAdsRenderer",
+    "adBreakServiceRenderer",
+    "displayAdRenderer",
+    "actionCompanionAdRenderer",
+    "feedAdMetadataViewModel",
+];
+
+/// Fields that only appear on ads, also when YouTube draws an ad with a regular
+/// video renderer or lockup.
+const AD_MARKERS: &[&str] = &["adSlotLoggingData", "adLayoutLoggingData", "adClientParams", "adVideoId", "promotedVideoRenderer"];
+
+/// Whether a renderer is an ad: it carries an ad-only field or an "Ad"/"Sponsored" badge.
+pub fn is_ad(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => m.iter().any(|(k, c)| {
+            AD_MARKERS.contains(&k.as_str())
+                || AD_RENDERERS.contains(&k.as_str())
+                || ((k == "style" || k == "badgeStyle") && matches!(c.as_str(), Some("BADGE_STYLE_TYPE_AD" | "BADGE_STYLE_TYPE_AD_INFO")))
+                || (k == "iconType" && c.as_str() == Some("AD_BADGE"))
+                || is_ad(c)
+        }),
+        Value::Array(a) => a.iter().any(is_ad),
+        _ => false,
+    }
+}
+
 /// Largest thumbnail url in a {thumbnails:[...]} or {sources:[...]} object.
 pub fn best_thumb(v: &Value) -> Option<String> {
     let arr = v

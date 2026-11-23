@@ -142,6 +142,12 @@ pub fn thumbnail(v: &VideoItem, url: String, w: Pixels, h: Pixels, radius: Pixel
 
 pub fn video_menu_items(v: &VideoItem) -> Vec<MenuItem> {
     let mut items = Vec::new();
+    {
+        let route = if v.is_short { Route::Shorts(Some(v.id.clone())) } else { Route::Watch { id: v.id.clone(), playlist: None, start: None } };
+        items.push(MenuItem::new("app-window", "Open in new tab", move |window, cx| {
+            crate::ui::app::open_in_new_tab(route.clone(), false, window, cx)
+        }));
+    }
     let v1 = v.clone();
     items.push(MenuItem::new("list-plus", "Add to queue", move |_, cx| {
         crate::player::controller::enqueue(v1.clone(), cx);
