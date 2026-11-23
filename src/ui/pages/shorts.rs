@@ -6,6 +6,7 @@ use crate::player::controller::player;
 use crate::store;
 use crate::ui::app::{Route, UiState, navigate};
 use crate::ui::*;
+use crate::ui::pages::watch::{reply_parents, thread_branch};
 use crate::ui::widgets::{Load, comment_body};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -29,6 +30,8 @@ pub struct ShortsPage {
     comments: Option<Load<CommentPage>>,
     comments_for: String,
     comments_more: bool,
+    /// opened reply threads, by comment id
+    replies: HashMap<String, Load<(Vec<Comment>, Option<String>)>>,
     /// where the comments panel was drawn: the wheel scrolls comments there, not Shorts
     comments_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     _sub: Subscription,
@@ -62,6 +65,7 @@ impl ShortsPage {
             comments: None,
             comments_for: String::new(),
             comments_more: false,
+            replies: HashMap::new(),
             comments_bounds: Default::default(),
             _sub: sub,
         };
@@ -246,6 +250,7 @@ impl ShortsPage {
             return;
         }
         self.comments_for = id.clone();
+        self.replies.clear();
         let token = self.meta.get(&id).and_then(|w| w.comments_token.clone());
         let Some(token) = token else {
             // still waiting for the watch info, or comments are off
@@ -320,6 +325,158 @@ impl ShortsPage {
         cx.notify();
     }
 
+    fn load_replies(&mut self, comment_id: String, token: String, cx: &mut Context<Self>) {
+        let append = matches!(self.replies.get(&comment_id), Some(Load::Ready(_)));
+        if !append {
+            self.replies.insert(comment_id.clone(), Load::Loading);
+        }
+        cx.spawn(async move |this, cx| {
+            let res = blocking(move || innertube::comments(&token)).await;
+            let _ = this.update(cx, |t, cx| {
+                // closed while loading: leave it closed
+                if !t.replies.contains_key(&comment_id) {
+                    return;
+                }
+                match res {
+                    Ok(p) => {
+                        if let Some(Load::Ready((list, cont))) = t.replies.get_mut(&comment_id) {
+                            list.extend(p.comments);
+                            *cont = p.continuation;
+                        } else {
+                            t.replies.insert(comment_id, Load::Ready((p.comments, p.continuation)));
+                        }
+                    }
+                    Err(e) => {
+                        t.replies.insert(comment_id, Load::Error(e.to_string()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// A reply and, hanging under it, the replies that answer it.
+    fn reply_subtree(&mut self, list: &[Comment], parents: &[Option<usize>], i: usize, cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let kids: Vec<usize> = (i + 1..list.len()).filter(|&j| parents[j] == Some(i)).collect();
+        let me = self.comment_row(&list[i], true, !kids.is_empty(), cx);
+        if kids.is_empty() {
+            return me;
+        }
+        let mut col = div().flex().flex_col().child(me);
+        for (k, &j) in kids.iter().enumerate() {
+            col = col.child(thread_branch(self.reply_subtree(list, parents, j, cx), k + 1 == kids.len(), 24., p.border));
+        }
+        col.into_any_element()
+    }
+
+    /// One comment; an opened one has its replies hanging under it on a thread line.
+    fn comment_row(&mut self, c: &Comment, is_reply: bool, thread: bool, cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let cid = c.id.clone();
+        let open = self.replies.contains_key(&c.id);
+        let size = if is_reply { 24. } else { 32. };
+        let a = avatar(c.author_avatar.as_deref(), px(size), &c.author, cx).into_any_element();
+        let a = if thread || (!is_reply && open) {
+            div().flex().flex_col().items_center().flex_none().child(a).child(div().flex_1().w(px(2.)).mt_1().bg(p.border)).into_any_element()
+        } else {
+            a
+        };
+        let toggle = c.replies_token.clone().filter(|_| !is_reply && !c.reply_count.is_empty() && c.reply_count != "0").map(|tok| {
+            let cid2 = cid.clone();
+            div()
+                .id(SharedString::from(format!("scr-btn-{}", c.id)))
+                .flex()
+                .items_center()
+                .gap_1()
+                .text_color(p.link)
+                .font_weight(FontWeight::MEDIUM)
+                .cursor_pointer()
+                .child(icon(if open { "chevron-up" } else { "chevron-down" }).size_4().text_color(p.link))
+                .child(format!("{} {}", c.reply_count, if c.reply_count == "1" { "reply" } else { "replies" }))
+                .on_click(cx.listener(move |t, _, _, cx| {
+                    if t.replies.remove(&cid2).is_some() {
+                        cx.notify();
+                    } else {
+                        t.load_replies(cid2.clone(), tok.clone(), cx);
+                    }
+                }))
+        });
+        let el = div()
+            .flex()
+            .gap_3()
+            .child(a)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_xs()
+                            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(c.author.clone()))
+                            .child(div().text_color(p.text2).child(c.published.clone())),
+                    )
+                    .child(div().text_sm().text_color(p.text).child(comment_body(format!("sct-{}", c.id), c, cx)))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .text_xs()
+                            .text_color(p.text2)
+                            .child(div().flex().items_center().gap_1().child(icon("thumbs-up").size_4().text_color(p.text2)).child(c.likes.clone()))
+                            .when(c.hearted, |d| d.child(icon("heart").size_4().text_color(rgb(0xff0033))))
+                            .children(toggle),
+                    ),
+            )
+            .into_any_element();
+        let Some(r) = self.replies.get(&c.id) else { return el };
+        let r: Option<Result<(Vec<Comment>, Option<String>), String>> = match r {
+            Load::Loading => None,
+            Load::Error(e) => Some(Err(e.clone())),
+            Load::Ready((l, c)) => Some(Ok((l.clone(), c.clone()))),
+        };
+        let mut col = div().flex().flex_col();
+        match r {
+            None => col = col.child(thread_branch(spinner(cx).into_any_element(), true, size, p.border)),
+            Some(Err(e)) => col = col.child(thread_branch(div().text_xs().text_color(p.text2).child(e).into_any_element(), true, size, p.border)),
+            Some(Ok((list, cont))) => {
+                // replies to replies nest under the reply they answer
+                let parents = reply_parents(&list);
+                let roots: Vec<usize> = (0..list.len()).filter(|&i| parents[i].is_none()).collect();
+                for (k, &i) in roots.iter().enumerate() {
+                    let last = k + 1 == roots.len() && cont.is_none();
+                    col = col.child(thread_branch(self.reply_subtree(&list, &parents, i, cx), last, size, p.border));
+                }
+                if let Some(tok) = cont {
+                    col = col.child(thread_branch(
+                        div()
+                            .id(SharedString::from(format!("scr-more-{cid}")))
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(p.link)
+                            .cursor_pointer()
+                            .child("Show more replies")
+                            .on_click(cx.listener(move |t, _, _, cx| t.load_replies(cid.clone(), tok.clone(), cx)))
+                            .into_any_element(),
+                        true,
+                        size,
+                        p.border,
+                    ));
+                }
+            }
+        }
+        div().flex().flex_col().child(el).child(col).into_any_element()
+    }
+
     fn advance(&mut self, cx: &mut Context<Self>) {
         if self.idx + 1 < self.list.len() {
             self.idx += 1;
@@ -384,13 +541,14 @@ impl ShortsPage {
             None | Some(Load::Loading) => body = body.child(div().py_8().flex().justify_center().child(spinner(cx))),
             Some(Load::Error(e)) => body = body.child(div().text_sm().text_color(p.text2).child(e.clone())),
             Some(Load::Ready(page)) => {
-                if page.comments.is_empty() {
+                let (list, more) = (page.comments.clone(), page.continuation.clone());
+                if list.is_empty() {
                     body = body.child(div().text_sm().text_color(p.text2).child("No comments yet."));
                 }
-                for c in &page.comments {
-                    body = body.child(comment_row(c, cx));
+                for c in &list {
+                    body = body.child(self.comment_row(c, false, false, cx));
                 }
-                if let Some(tok) = page.continuation.clone() {
+                if let Some(tok) = more {
                     body = body.child(
                         div()
                             .id("sh-cm-more")
@@ -578,44 +736,4 @@ impl Render for ShortsPage {
             )
             .into_any_element()
     }
-}
-
-fn comment_row(c: &Comment, cx: &App) -> AnyElement {
-    let p = pal(cx);
-    div()
-        .flex()
-        .gap_3()
-        .child(avatar(c.author_avatar.as_deref(), px(32.), &c.author, cx))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .gap_1()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(c.author.clone()))
-                        .child(div().text_color(p.text2).child(c.published.clone())),
-                )
-                .child(div().text_sm().text_color(p.text).child(comment_body(format!("sct-{}", c.id), c, cx)))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .text_xs()
-                        .text_color(p.text2)
-                        .child(div().flex().items_center().gap_1().child(icon("thumbs-up").size_4().text_color(p.text2)).child(c.likes.clone()))
-                        .when(c.hearted, |d| d.child(icon("heart").size_4().text_color(rgb(0xff0033))))
-                        .when(!c.reply_count.is_empty() && c.reply_count != "0", |d| {
-                            d.child(div().text_color(p.link).child(format!("{} {}", c.reply_count, if c.reply_count == "1" { "reply" } else { "replies" })))
-                        }),
-                ),
-        )
-        .into_any_element()
 }

@@ -1387,7 +1387,7 @@ fn set_rating(id: &str, r: i8, cx: &mut App) {
 /// One branch of a comment thread: the child hangs off the line that comes down
 /// from the parent's avatar (`avatar` px wide) with a rounded elbow; the line runs
 /// on past every child but the last.
-fn thread_branch(child: AnyElement, last: bool, avatar: f32, line: Hsla) -> AnyElement {
+pub(crate) fn thread_branch(child: AnyElement, last: bool, avatar: f32, line: Hsla) -> AnyElement {
     let x = avatar / 2.0 - 1.0;
     let indent = avatar + 16.0;
     div()
@@ -1415,7 +1415,7 @@ fn thread_branch(child: AnyElement, last: bool, avatar: f32, line: Hsla) -> AnyE
 /// starts an answer with "@name", so a reply opening with the name of someone who
 /// replied before it hangs under that person's latest reply. Nesting stops a few
 /// levels deep (deeper answers sit beside the reply they answer).
-fn reply_parents(list: &[Comment]) -> Vec<Option<usize>> {
+pub(crate) fn reply_parents(list: &[Comment]) -> Vec<Option<usize>> {
     const MAX_DEPTH: usize = 3;
     let norm = |s: &str| s.trim().trim_start_matches('@').to_lowercase();
     let mut parents: Vec<Option<usize>> = Vec::with_capacity(list.len());
