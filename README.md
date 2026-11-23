@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D6" alt="Windows and Linux">
-  <img src="https://img.shields.io/github/v/release/Avaneesh-Inamdar/Stream-Tube-Desktop?include_prereleases&label=release" alt="Latest release">
+  <img src="https://img.shields.io/github/v/release/Avaneesh-Inamdar/Stream-Tube-Desktop?include_prereleases&sort=semver&label=release" alt="Latest release">
   <a href="https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/releases"><img src="https://img.shields.io/github/downloads/Avaneesh-Inamdar/Stream-Tube-Desktop/total?label=downloads&color=FF0033&cacheSeconds=3600" alt="Total downloads"></a>
   <img src="https://img.shields.io/badge/built%20with-Rust-B7410E" alt="Rust">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
@@ -197,8 +197,8 @@ sudo dnf install mpv-libs     # Fedora
 sudo pacman -S mpv            # Arch
 ```
 
-**macOS (Apple Silicon), unofficial.** Releases may include a
-`StreamTube-<version>-macos-arm64-UNOFFICIAL.zip`. It is built from the
+**macOS (Apple Silicon), unofficial.** A community build is published separately
+on the Releases page as *macOS … (UNOFFICIAL community build)*. It is built from the
 [`community/macos-apple-silicon`](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/tree/community/macos-apple-silicon)
 branch, contributed by [William Wessex](https://github.com/wwessex). It is **not
 made or tested by the maintainer** and isn't supported: use it at your own risk.
