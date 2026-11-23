@@ -21,6 +21,8 @@ pub struct Settings {
     pub language: String,
     // Backend
     pub stream_backend: String,
+    /// Linux: "auto", "x11" or "wayland" (see display.rs)
+    pub display_server: String,
     pub ytdlp_path: String,
     pub proxy: String,
     // Player
@@ -139,6 +141,7 @@ impl Default for Settings {
             region: "US".into(),
             language: "en".into(),
             stream_backend: "auto".into(),
+            display_server: "auto".into(),
             ytdlp_path: String::new(),
             proxy: String::new(),
             default_quality: 1080,

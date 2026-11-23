@@ -905,6 +905,20 @@ impl SettingsPage {
                 ),
                 cx,
             ))
+            .when(cfg!(target_os = "linux"), |d| {
+                d.child(row(
+                    "Display server",
+                    "On Wayland desktops, X11 runs through XWayland. Choose X11 if the window doesn't appear. Takes effect after restart",
+                    self.choice(
+                        "display",
+                        &[("auto".to_string(), "Auto"), ("wayland".to_string(), "Wayland"), ("x11".to_string(), "X11")],
+                        s.display_server.clone(),
+                        |s, v| s.display_server = v,
+                        cx,
+                    ),
+                    cx,
+                ))
+            })
             .child(row(
                 "yt-dlp path",
                 &match &self.ytdlp_version {

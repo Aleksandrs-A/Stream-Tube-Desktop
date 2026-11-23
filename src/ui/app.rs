@@ -2504,6 +2504,7 @@ impl AppView {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::perf::add(&crate::perf::APP_RENDERS, 1);
+        crate::display::mark_drawn();
         if std::mem::take(&mut self.reload_page) {
             // account changed: feeds that depend on it are rebuilt (the watch page keeps playing)
             if matches!(self.route, Route::Home | Route::Subscriptions | Route::Channels) {

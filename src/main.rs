@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod api;
 mod assets;
+mod display;
 mod perf;
 mod recommend;
 mod downloads;
@@ -62,9 +63,10 @@ fn main() {
     }
     perf::init();
     store::init();
+    display::choose();
     // one running app: a second launch (e.g. a clicked streamtube: link) hands over and exits
     let arg = std::env::args().nth(1).unwrap_or_default();
-    if links::forward_to_running(&arg) {
+    if !display::relaunched() && links::forward_to_running(&arg) {
         return;
     }
     let incoming = links::listen();
