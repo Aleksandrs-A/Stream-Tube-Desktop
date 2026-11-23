@@ -383,10 +383,13 @@ impl Mpv {
                     if rc < 0 {
                         continue;
                     }
-                    let src = std::slice::from_raw_parts(buf.as_ptr() as *const u8, bytes);
-                    let mut data = src.to_vec();
-                    for px in data.chunks_exact_mut(4) {
-                        px[3] = 255;
+                    // one pass: copy each pixel out with its padding byte set to opaque
+                    // (the buffer is 64-byte aligned, so reading it as u32 is fine)
+                    let src = std::slice::from_raw_parts(buf.as_ptr() as *const u32, bytes / 4);
+                    let opaque = u32::from_ne_bytes([0, 0, 0, 0xFF]);
+                    let mut data = vec![0u8; bytes];
+                    for (d, s) in data.chunks_exact_mut(4).zip(src) {
+                        d.copy_from_slice(&(s | opaque).to_ne_bytes());
                     }
                     let serial = r.serial.fetch_add(1, Ordering::Relaxed) + 1;
                     *r.frame.lock() = Some(VideoFrame { width: w, height: h, data, serial });
