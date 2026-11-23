@@ -63,7 +63,7 @@ jobs:
           install -Dm644 packaging/linux/streamtube.desktop "$root/usr/share/applications/streamtube.desktop"
           install -Dm644 assets/logo.png "$root/usr/share/icons/hicolor/256x256/apps/streamtube.png"
           install -Dm644 assets/logo.svg "$root/usr/share/icons/hicolor/scalable/apps/streamtube.svg"
-          install -Dm644 packaging/linux/streamtube.appdata.xml "$root/usr/share/metainfo/streamtube.appdata.xml"
+          install -Dm644 packaging/linux/io.github.avaneesh_inamdar.StreamTube.metainfo.xml "$root/usr/share/metainfo/io.github.avaneesh_inamdar.StreamTube.metainfo.xml"
           install -Dm644 LICENSE "$root/usr/share/doc/streamtube/LICENSE"
           install -Dm644 README.md "$root/usr/share/doc/streamtube/README.md"
 
@@ -115,13 +115,16 @@ jobs:
           app=AppDir
           install -Dm755 target/release/streamtube "$app/usr/bin/streamtube"
           strip "$app/usr/bin/streamtube"
-          install -Dm644 packaging/linux/streamtube.desktop "$app/usr/share/applications/streamtube.desktop"
+          # inside the AppImage the desktop entry and metadata are named after the app id
+          cid=io.github.avaneesh_inamdar.StreamTube
+          install -Dm644 packaging/linux/streamtube.desktop "$app/usr/share/applications/$cid.desktop"
           install -Dm644 assets/logo.png "$app/usr/share/icons/hicolor/256x256/apps/streamtube.png"
           install -Dm644 assets/logo.svg "$app/usr/share/icons/hicolor/scalable/apps/streamtube.svg"
           install -Dm644 LICENSE "$app/usr/share/doc/streamtube/LICENSE"
-          install -Dm644 packaging/linux/streamtube.appdata.xml "$app/usr/share/metainfo/streamtube.appdata.xml"
-          desktop-file-validate "$app/usr/share/applications/streamtube.desktop" || true
-          appstreamcli validate --no-net "$app/usr/share/metainfo/streamtube.appdata.xml" || true
+          mkdir -p "$app/usr/share/metainfo"
+          sed "s|>streamtube.desktop<|>$cid.desktop<|" "packaging/linux/$cid.metainfo.xml" > "$app/usr/share/metainfo/$cid.metainfo.xml"
+          desktop-file-validate "$app/usr/share/applications/$cid.desktop" || true
+          appstreamcli validate --no-net "$app/usr/share/metainfo/$cid.metainfo.xml" || true
 
           mpv=$(ls /usr/lib/x86_64-linux-gnu/libmpv.so.2 /usr/lib/x86_64-linux-gnu/libmpv.so.1 2>/dev/null | head -1)
           echo "bundling $mpv"
