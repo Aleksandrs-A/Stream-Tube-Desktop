@@ -150,6 +150,28 @@ fn fetch_account_name() -> Result<String> {
     name.or(handle).ok_or_else(|| anyhow!("not signed in"))
 }
 
+/// Regular videos of a page, without the Shorts shelf (its items carry no channel or length).
+fn long_videos(p: crate::api::types::Page) -> crate::api::types::Page {
+    use crate::api::types::Item;
+    let mut seen = std::collections::HashSet::new();
+    crate::api::types::Page {
+        items: p.items.into_iter().filter(|i| matches!(i, Item::Video(v) if !v.is_short && !v.channel_name.is_empty() && seen.insert(v.id.clone()))).collect(),
+        continuation: p.continuation,
+    }
+}
+
+/// The account's own home feed, the same one youtube.com shows.
+pub fn home() -> Result<crate::api::types::Page> {
+    let r = web_call("browse", json!({ "browseId": "FEwhat_to_watch" }))?;
+    Ok(long_videos(crate::api::innertube::collect_items(&r)))
+}
+
+/// Next page of a feed loaded with the browser session.
+pub fn browse_continue(token: &str) -> Result<crate::api::types::Page> {
+    let r = web_call("browse", json!({ "continuation": token }))?;
+    Ok(long_videos(crate::api::innertube::collect_items(&r)))
+}
+
 // ───────────── sign-in through a browser ─────────────
 
 /// Chromium-based browsers the sign-in can use, most likely first.
@@ -396,14 +418,51 @@ impl Watch {
             (0..16).map(|_| A[rng.random_range(0..A.len())] as char).collect()
         };
         let w = Watch { id: id.to_string(), playback, watchtime, cpn, len, started: Instant::now(), last_ping: Instant::now(), last_cmt: 0.0, pings: 0, playing: true };
-        w.get(&w.playback, &format!("cmt=0&fs=0&rtn=0&lact=1&state=playing&volume=100&muted=0&len={:.3}", w.len))?;
+        w.get(&w.playback, &[("cmt", "0".into()), ("rtn", "0".into()), ("state", "playing".into())])?;
         Ok(w)
     }
 
-    fn get(&self, base: &str, extra: &str) -> Result<()> {
-        let cookie = cookie_header().unwrap_or_default();
+    /// Sends a stats ping: the base URL from the player response with the fields
+    /// youtube.com's own player adds. Fields already in the base URL are replaced,
+    /// never repeated.
+    fn get(&self, base: &str, fields: &[(&str, String)]) -> Result<()> {
         let rt = self.started.elapsed().as_secs_f64();
-        let url = format!("{base}&ver=2&cpn={}&c=WEB&cver={WEB_VERSION}&rt={rt:.3}&{extra}", self.cpn);
+        let mut add: Vec<(&str, String)> = vec![
+            ("ver", "2".into()),
+            ("cpn", self.cpn.clone()),
+            ("c", "WEB".into()),
+            ("cver", WEB_VERSION.into()),
+            ("cplayer", "UNIPLAYER".into()),
+            ("cbr", "Chrome".into()),
+            ("cbrver", "140.0.0.0".into()),
+            ("cos", "Windows".into()),
+            ("cosver", "10.0".into()),
+            ("cplatform", "DESKTOP".into()),
+            ("fs", "0".into()),
+            ("volume", "100".into()),
+            ("muted", "0".into()),
+            ("lact", "1200".into()),
+            ("len", format!("{:.3}", self.len)),
+            ("rt", format!("{rt:.3}")),
+        ];
+        add.extend(fields.iter().cloned());
+        let (path, query) = base.split_once('?').unwrap_or((base, ""));
+        let mut pairs: Vec<(String, String)> = query
+            .split('&')
+            .filter(|kv| !kv.is_empty())
+            .map(|kv| {
+                let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                (k.to_string(), v.to_string())
+            })
+            .collect();
+        for (k, v) in add {
+            match pairs.iter_mut().find(|(pk, _)| pk == k) {
+                Some(p) => p.1 = v,
+                None => pairs.push((k.to_string(), v)),
+            }
+        }
+        let url = format!("{path}?{}", pairs.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&"));
+        let cookie = cookie_header().unwrap_or_default();
         let referer = format!("https://www.youtube.com/watch?v={}", self.id);
         http::get_bytes(&url, &[("Cookie", &cookie), ("Referer", &referer), ("Origin", ORIGIN)])?;
         Ok(())
@@ -413,13 +472,24 @@ impl Watch {
     fn report(&mut self, cmt: f64, playing: bool, last: bool) {
         let st = if cmt >= self.last_cmt && cmt - self.last_cmt < 120.0 { self.last_cmt } else { cmt };
         let rtn = self.started.elapsed().as_secs_f64();
-        let extra = format!(
-            "cmt={cmt:.3}&st={st:.3}&et={cmt:.3}&len={:.3}&state={}&volume=100&muted=0&fs=0&lact=1&rtn={rtn:.0}&rti={rtn:.0}{}",
-            self.len,
-            if playing { "playing" } else { "paused" },
-            if last && self.len > 0.0 && cmt >= self.len - 1.0 { "&final=1" } else { "" },
-        );
-        let _ = self.get(&self.watchtime, &extra);
+        let mut fields = vec![
+            ("cmt", format!("{cmt:.3}")),
+            ("st", format!("{st:.3}")),
+            ("et", format!("{cmt:.3}")),
+            ("state", if playing { "playing" } else { "paused" }.to_string()),
+            ("rtn", format!("{:.0}", rtn.max(1.0))),
+            ("rti", format!("{:.0}", rtn.max(1.0))),
+            ("idpj", "-1".into()),
+            ("ldpj", "-1".into()),
+        ];
+        if last {
+            fields.push(("final", "1".into()));
+        }
+        if let Err(e) = self.get(&self.watchtime, &fields) {
+            if cfg!(test) {
+                eprintln!("watchtime ping failed: {e}");
+            }
+        }
         self.last_cmt = cmt;
         self.last_ping = Instant::now();
         self.pings += 1;
@@ -500,4 +570,3 @@ pub fn report_stop(id: &str, t: f64) {
         let _ = reporter().lock().send(Event::Stop { id: id.to_string(), t });
     }
 }
-

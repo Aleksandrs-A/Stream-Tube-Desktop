@@ -118,6 +118,10 @@ pub struct Comment {
     pub is_verified: bool,
     pub is_pinned: bool,
     pub hearted: bool,
+    /// Channel emojis in the text: (shortcut as written, e.g. ":_wave:", image URL)
+    pub emojis: Vec<(String, String)>,
+    /// GIF or sticker posted with the comment: (URL, width / height)
+    pub image: Option<(String, f32)>,
 }
 
 #[derive(Clone, Debug, Default)]

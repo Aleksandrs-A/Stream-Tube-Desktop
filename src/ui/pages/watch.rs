@@ -37,8 +37,13 @@ pub struct WatchPage {
     comments: Option<Load<CommentPage>>,
     comments_more_loading: bool,
     comment_sort_new: bool,
-    /// "Timed" view: comments that mention a timestamp, in video order
+    /// "Timed" view: comments that mention a timestamp, shown once playback reaches it
     comment_timed: bool,
+    /// While the timed view is open: refreshes it as playback moves and loads more
+    /// comments to find timestamped ones. Dropped (stopped) when the view closes.
+    timed_ticker: Option<Task<()>>,
+    /// How many timed comments were last shown (repaint only when it changes)
+    timed_shown: usize,
     replies: HashMap<String, Load<(Vec<Comment>, Option<String>)>>,
     related_more_loading: bool,
     scroll: ScrollHandle,
@@ -93,6 +98,8 @@ impl WatchPage {
             comments_more_loading: false,
             comment_sort_new: false,
             comment_timed: false,
+            timed_ticker: None,
+            timed_shown: 0,
             replies: HashMap::new(),
             related_more_loading: false,
             scroll: ScrollHandle::new(),
@@ -457,6 +464,47 @@ impl WatchPage {
         }
     }
 
+    /// Comments already loaded that mention a timestamp, earliest first.
+    fn stamped(&self) -> Vec<(f64, Comment)> {
+        let Some(Load::Ready(data)) = &self.comments else { return Vec::new() };
+        let mut v: Vec<(f64, Comment)> = data.comments.iter().filter_map(|c| first_timestamp(&c.text).map(|t| (t, c.clone()))).collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v
+    }
+
+    fn set_timed(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.comment_timed = on;
+        self.timed_shown = 0;
+        self.timed_ticker = on.then(|| {
+            cx.spawn(async move |this, cx| loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                let alive = this.update(cx, |this, cx| {
+                    if !this.comment_timed {
+                        return false;
+                    }
+                    let now = player(cx).read(cx).time;
+                    let shown = this.stamped().iter().filter(|(t, _)| *t <= now + 0.5).count();
+                    if shown != this.timed_shown {
+                        this.timed_shown = shown;
+                        cx.notify();
+                    }
+                    // keep loading pages (up to a few hundred comments) to find more timestamps
+                    if let Some(Load::Ready(c)) = &this.comments {
+                        if let (Some(tok), false, true) = (c.continuation.clone(), this.comments_more_loading, c.comments.len() < 400) {
+                            this.comments_more_loading = true;
+                            this.load_comments(tok, true, cx);
+                        }
+                    }
+                    true
+                });
+                if !matches!(alive, Ok(true)) {
+                    break;
+                }
+            })
+        });
+        cx.notify();
+    }
+
     fn load_comments(&mut self, token: String, append: bool, cx: &mut Context<Self>) {
         if !append {
             self.comments = Some(Load::Loading);
@@ -774,6 +822,26 @@ impl WatchPage {
     }
 
     fn render_comment(&mut self, c: &Comment, is_reply: bool, cx: &mut Context<Self>) -> AnyElement {
+        self.render_comment_t(c, is_reply, false, cx)
+    }
+
+    /// A reply and, hanging under it, the replies that answer it.
+    fn reply_subtree(&mut self, list: &[Comment], parents: &[Option<usize>], i: usize, cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let kids: Vec<usize> = (i + 1..list.len()).filter(|&j| parents[j] == Some(i)).collect();
+        let me = self.render_comment_t(&list[i], true, !kids.is_empty(), cx);
+        if kids.is_empty() {
+            return me;
+        }
+        let mut col = div().flex().flex_col().child(me);
+        for (k, &j) in kids.iter().enumerate() {
+            col = col.child(thread_branch(self.reply_subtree(list, parents, j, cx), k + 1 == kids.len(), 24., p.border));
+        }
+        col.into_any_element()
+    }
+
+    /// `thread`: draw the thread line down from the avatar (replies hang below).
+    fn render_comment_t(&mut self, c: &Comment, is_reply: bool, thread: bool, cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
         let cid = c.id.clone();
         let token = c.replies_token.clone();
@@ -782,7 +850,15 @@ impl WatchPage {
         let mut el = div()
             .flex()
             .gap_4()
-            .child(avatar(c.author_avatar.as_deref(), px(if is_reply { 24. } else { 40. }), &c.author, cx))
+            .child({
+                let a = avatar(c.author_avatar.as_deref(), px(if is_reply { 24. } else { 40. }), &c.author, cx).into_any_element();
+                if thread || (!is_reply && replies.is_some()) {
+                    // the thread line starts under the avatar of an opened comment
+                    div().flex().flex_col().items_center().flex_none().child(a).child(div().flex_1().w(px(2.)).mt_1().bg(p.border)).into_any_element()
+                } else {
+                    a
+                }
+            })
             .child(
                 div()
                     .flex()
@@ -814,7 +890,7 @@ impl WatchPage {
                             .when(c.is_verified, |d| d.child(icon("badge-check").size_3().text_color(p.text2)))
                             .child(div().text_xs().text_color(p.text2).child(c.published.clone())),
                     )
-                    .child(div().text_sm().text_color(p.text).child(rich_text(SharedString::from(format!("ct-{}", c.id)), c.text.clone(), cx)))
+                    .child(div().text_sm().text_color(p.text).child(comment_body(format!("ct-{}", c.id), c, cx)))
                     .child(
                         div()
                             .flex()
@@ -863,29 +939,37 @@ impl WatchPage {
                 Load::Error(e) => Some(Err(e.clone())),
                 Load::Ready((l, c)) => Some(Ok((l.clone(), c.clone()))),
             };
-            let mut col = div().flex().flex_col().gap_4().pl(px(56.));
+            let mut col = div().flex().flex_col();
             match r {
-                None => col = col.child(spinner(cx)),
-                Some(Err(e)) => col = col.child(div().text_xs().text_color(p.text2).child(e)),
+                None => col = col.child(thread_branch(spinner(cx).into_any_element(), true, 40., p.border)),
+                Some(Err(e)) => col = col.child(thread_branch(div().text_xs().text_color(p.text2).child(e).into_any_element(), true, 40., p.border)),
                 Some(Ok((list, cont))) => {
-                    for rc in &list {
-                        col = col.child(self.render_comment(rc, true, cx));
+                    // replies to replies nest under the reply they answer
+                    let parents = reply_parents(&list);
+                    let roots: Vec<usize> = (0..list.len()).filter(|&i| parents[i].is_none()).collect();
+                    for (k, &i) in roots.iter().enumerate() {
+                        let last = k + 1 == roots.len() && cont.is_none();
+                        col = col.child(thread_branch(self.reply_subtree(&list, &parents, i, cx), last, 40., p.border));
                     }
                     if let Some(tok) = cont {
                         let cid3 = cid.clone();
-                        col = col.child(
+                        col = col.child(thread_branch(
                             div()
                                 .id(SharedString::from(format!("cr-more-{cid}")))
                                 .text_sm()
                                 .text_color(p.link)
                                 .cursor_pointer()
                                 .child("Show more replies")
-                                .on_click(cx.listener(move |this, _, _, cx| this.load_replies(cid3.clone(), tok.clone(), cx))),
-                        );
+                                .on_click(cx.listener(move |this, _, _, cx| this.load_replies(cid3.clone(), tok.clone(), cx)))
+                                .into_any_element(),
+                            true,
+                            40.,
+                            p.border,
+                        ));
                     }
                 }
             }
-            el = div().flex().flex_col().gap_3().child(el).child(col).into_any_element();
+            el = div().flex().flex_col().child(el).child(col).into_any_element();
         }
         el
     }
@@ -922,40 +1006,54 @@ impl WatchPage {
                         .when_some(top, |d, t| {
                             d.child(chip("c-top", "Top", !sort_new && !timed, cx).on_click(cx.listener(move |this, _, _, cx| {
                                 this.comment_sort_new = false;
-                                this.comment_timed = false;
-                                this.load_comments(t.clone(), false, cx);
-                            })))
-                        })
-                        .when_some(new, |d, t| {
-                            d.child(chip("c-new", "Newest", sort_new && !timed, cx).on_click(cx.listener(move |this, _, _, cx| {
-                                this.comment_sort_new = true;
-                                this.comment_timed = false;
+                                this.set_timed(false, cx);
                                 this.load_comments(t.clone(), false, cx);
                             })))
                         })
                         .child(chip("c-timed", "Timed", timed, cx).on_click(cx.listener(|this, _, _, cx| {
-                            this.comment_timed ^= true;
-                            cx.notify();
-                        }))),
+                            let on = !this.comment_timed;
+                            this.set_timed(on, cx);
+                        })))
+                        .when_some(new, |d, t| {
+                            d.child(chip("c-new", "Newest", sort_new && !timed, cx).on_click(cx.listener(move |this, _, _, cx| {
+                                this.comment_sort_new = true;
+                                this.set_timed(false, cx);
+                                this.load_comments(t.clone(), false, cx);
+                            })))
+                        }),
                 ),
         );
         if timed {
+            // like youtube.com: a comment shows up once the video reaches the moment
+            // it's about, the latest one on top
             let now = player(cx).read(cx).time;
-            let mut stamped: Vec<(f64, &Comment)> = data.comments.iter().filter_map(|c| first_timestamp(&c.text).map(|t| (t, c))).collect();
-            stamped.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let current = stamped.iter().rposition(|(t, _)| *t <= now + 0.5);
-            if stamped.is_empty() {
-                col = col.child(div().text_sm().text_color(p.text2).child("No comments with timestamps yet. More appear as you scroll and load comments."));
-            }
-            for (i, (t, c)) in stamped.into_iter().enumerate() {
-                let t2 = t;
+            let stamped = self.stamped();
+            let total = stamped.len();
+            let mut reached: Vec<(f64, Comment)> = stamped.into_iter().filter(|(t, _)| *t <= now + 0.5).collect();
+            reached.reverse();
+            let later = total - reached.len();
+            col = col.child(div().text_sm().text_color(p.text2).child(if total == 0 {
+                if data.continuation.is_some() && data.comments.len() < 400 {
+                    format!("Looking for comments with timestamps… ({} checked)", data.comments.len())
+                } else {
+                    format!("None of the {} comments checked mention a timestamp.", data.comments.len())
+                }
+            } else if reached.is_empty() {
+                format!("Comments appear here as the video reaches the moment they mention ({total} so far).")
+            } else if later > 0 {
+                format!("{later} more later in the video")
+            } else {
+                String::new()
+            }));
+            for (i, (t, c)) in reached.iter().enumerate() {
+                let t2 = *t;
                 col = col.child(
                     div()
                         .flex()
                         .gap_3()
                         .p_2()
                         .rounded_lg()
-                        .when(current == Some(i), |d| d.bg(p.hover))
+                        .when(i == 0, |d| d.bg(p.hover))
                         .child(
                             div()
                                 .id(SharedString::from(format!("ctime-{}", c.id)))
@@ -970,7 +1068,7 @@ impl WatchPage {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(p.link)
                                 .cursor_pointer()
-                                .child(crate::api::json::format_duration(t as u64))
+                                .child(crate::api::json::format_duration(*t as u64))
                                 .on_click(move |_, _, cx| {
                                     player(cx).update(cx, |p, cx| {
                                         p.seek_to(t2);
@@ -1284,4 +1382,83 @@ fn set_rating(id: &str, r: i8, cx: &mut App) {
         .detach();
     }
     cx.refresh_windows();
+}
+
+/// One branch of a comment thread: the child hangs off the line that comes down
+/// from the parent's avatar (`avatar` px wide) with a rounded elbow; the line runs
+/// on past every child but the last.
+fn thread_branch(child: AnyElement, last: bool, avatar: f32, line: Hsla) -> AnyElement {
+    let x = avatar / 2.0 - 1.0;
+    let indent = avatar + 16.0;
+    div()
+        .relative()
+        .pt_3()
+        .pl(px(indent))
+        .when(!last, |d| d.child(div().absolute().left(px(x)).top_0().bottom_0().w(px(2.)).bg(line)))
+        .child(
+            div()
+                .absolute()
+                .left(px(x))
+                .top_0()
+                .w(px(indent - x - 4.0))
+                .h(px(24.))
+                .border_l_2()
+                .border_b_2()
+                .rounded_bl(px(12.))
+                .border_color(line),
+        )
+        .child(child)
+        .into_any_element()
+}
+
+/// For each reply, the earlier reply it answers: YouTube keeps replies flat and
+/// starts an answer with "@name", so a reply opening with the name of someone who
+/// replied before it hangs under that person's latest reply. Nesting stops a few
+/// levels deep (deeper answers sit beside the reply they answer).
+fn reply_parents(list: &[Comment]) -> Vec<Option<usize>> {
+    const MAX_DEPTH: usize = 3;
+    let norm = |s: &str| s.trim().trim_start_matches('@').to_lowercase();
+    let mut parents: Vec<Option<usize>> = Vec::with_capacity(list.len());
+    let mut depth: Vec<usize> = Vec::with_capacity(list.len());
+    for (i, c) in list.iter().enumerate() {
+        let text = c.text.trim_start();
+        let parent = text
+            .strip_prefix('@')
+            .and_then(|t| t.split(|ch: char| ch.is_whitespace()).next())
+            .map(|name| name.trim_end_matches(|ch: char| matches!(ch, ',' | ':' | '.' | '!' | '?')).to_lowercase())
+            .filter(|name| !name.is_empty())
+            .and_then(|name| (0..i).rev().find(|&j| norm(&list[j].author) == name && list[j].author != c.author));
+        let parent = parent.map(|mut j| {
+            while depth[j] >= MAX_DEPTH {
+                j = parents[j].expect("deep replies have parents");
+            }
+            j
+        });
+        depth.push(parent.map(|j| depth[j] + 1).unwrap_or(1));
+        parents.push(parent);
+    }
+    parents
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Comment, reply_parents};
+    fn c(author: &str, text: &str) -> Comment {
+        Comment { author: author.into(), text: text.into(), ..Default::default() }
+    }
+    #[test]
+    fn replies_nest_under_the_reply_they_answer() {
+        let list = vec![
+            c("@ann", "first"),
+            c("@bob", "@ann agreed"),
+            c("@cat", "unrelated"),
+            c("@ann", "@bob, thanks"),
+            c("@dan", "@nobody hi"),
+            c("@bob", "@ann np"),
+            c("@ann", "@bob ok"),
+        ];
+        let p = reply_parents(&list);
+        // index 3 is already three levels deep, so answers to it sit beside it
+        assert_eq!(p, vec![None, Some(0), None, Some(1), None, Some(1), Some(1)]);
+    }
 }

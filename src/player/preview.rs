@@ -87,6 +87,9 @@ pub fn hover(id: &str, hovered: bool, cx: &mut App) {
         }
     }
     let id = id.to_string();
+    if p.read(cx).id.as_deref() != Some(id.as_str()) {
+        cx.global::<PreviewSlot>().0.set(None);
+    }
     let serial = p.update(cx, |p, cx| {
         p.serial += 1;
         if p.id.as_deref() != Some(id.as_str()) {
@@ -121,6 +124,9 @@ pub fn stop(cx: &mut App) {
     if cx.try_global::<PreviewHandle>().is_none() {
         return;
     }
+    // forget where the last thumbnail was: a preview only shows over a thumbnail
+    // that's drawn on the current page
+    cx.global::<PreviewSlot>().0.set(None);
     let serial = preview(cx).update(cx, |p, cx| {
         p.serial += 1;
         p.id = None;

@@ -7,6 +7,8 @@ use crate::ui::*;
 
 /// Marks continuations of the signed-in home feed (they need the TV client).
 const ACCOUNT: &str = "acct:";
+/// Marks continuations of the home feed loaded with the browser sign-in.
+const WEB: &str = "web:";
 
 /// Videos at the top of the last home load. A refresh moves them down so it
 /// actually shows something new (YouTube returns much the same first page).
@@ -52,9 +54,23 @@ impl HomePage {
         let chip = self.chip;
         cx.spawn(async move |this, cx| {
             let res = blocking(move || -> anyhow::Result<(Vec<Item>, Option<String>)> {
+                if chip == 0 && crate::api::web::connected() {
+                    // the account's home feed exactly as youtube.com builds it
+                    for _ in 0..2 {
+                        match crate::api::web::home() {
+                            Ok(p) if !p.items.is_empty() => return Ok((freshen(p.items), p.continuation.map(|c| format!("{WEB}{c}")))),
+                            _ => std::thread::sleep(std::time::Duration::from_millis(400)),
+                        }
+                    }
+                }
                 if chip == 0 && crate::api::auth::signed_in() {
-                    // YouTube's own recommendations for the account
-                    if let Ok(mut p) = crate::api::auth::home() {
+                    // YouTube's own recommendations for the account (a failed request is
+                    // retried once before falling back, so the feed stays personal)
+                    let home = crate::api::auth::home().ok().filter(|p| !p.items.is_empty()).or_else(|| {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                        crate::api::auth::home().ok()
+                    });
+                    if let Some(mut p) = home {
                         if !p.items.is_empty() {
                             // a second page gives a refresh more to choose from
                             if let Some(c) = p.continuation.take() {
@@ -69,6 +85,26 @@ impl HomePage {
                             }
                             return Ok((freshen(p.items), p.continuation.map(|c| format!("{ACCOUNT}{c}"))));
                         }
+                    }
+                }
+                if chip == 0 && crate::recommend::available() {
+                    // no account: videos related to what was watched and searched here,
+                    // with new uploads from local subscriptions mixed in
+                    let mut picks = crate::recommend::for_you();
+                    if !picks.is_empty() {
+                        if !store::subscriptions().is_empty() {
+                            let (feed, _) = crate::feed::cached_feed(None);
+                            let mut subs = feed.into_iter().take(30).map(Item::Video);
+                            let mut out = Vec::new();
+                            for (i, it) in picks.drain(..).enumerate() {
+                                out.push(it);
+                                if i % 3 == 2 {
+                                    out.extend(subs.next());
+                                }
+                            }
+                            picks = out;
+                        }
+                        return Ok((freshen(picks), None));
                     }
                 }
                 if chip == 0 {
@@ -156,12 +192,20 @@ impl HomePage {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let res = blocking(move || match tok.strip_prefix(ACCOUNT) {
-                Some(t) => crate::api::auth::browse_continue(t).map(|mut p| {
-                    p.continuation = p.continuation.map(|c| format!("{ACCOUNT}{c}"));
-                    p
-                }),
-                None => innertube::browse_continue(&tok),
+            let res = blocking(move || {
+                if let Some(t) = tok.strip_prefix(WEB) {
+                    return crate::api::web::browse_continue(t).map(|mut p| {
+                        p.continuation = p.continuation.map(|c| format!("{WEB}{c}"));
+                        p
+                    });
+                }
+                match tok.strip_prefix(ACCOUNT) {
+                    Some(t) => crate::api::auth::browse_continue(t).map(|mut p| {
+                        p.continuation = p.continuation.map(|c| format!("{ACCOUNT}{c}"));
+                        p
+                    }),
+                    None => innertube::browse_continue(&tok),
+                }
             })
             .await;
             let _ = this.update(cx, |this, cx| {
@@ -190,7 +234,18 @@ impl Render for HomePage {
         let width = content_width(cx);
         let (_, card_w) = grid_columns(width, 300.0);
         let mut chips = div().flex().gap_3().py_3().px_6().bg(p.bg).child(
-            chip("chip-all", if store::subscriptions().is_empty() && !crate::api::auth::signed_in() { "Popular" } else { "All" }, self.chip == 0, cx)
+            chip(
+                "chip-all",
+                if crate::api::auth::signed_in() || crate::api::web::connected() || !store::subscriptions().is_empty() {
+                    "All"
+                } else if crate::recommend::available() {
+                    "For you"
+                } else {
+                    "Popular"
+                },
+                self.chip == 0,
+                cx,
+            )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.chip = 0;
                     this.load(cx);

@@ -2,6 +2,7 @@
 mod api;
 mod assets;
 mod perf;
+mod recommend;
 mod downloads;
 mod feed;
 mod import;

@@ -28,7 +28,7 @@ struct ChannelPage0 {
     tabs: Vec<ChannelTab>,
 }
 
-const WANTED_TABS: &[&str] = &["Home", "Videos", "Shorts", "Live", "Podcasts", "Releases", "Playlists", "Courses"];
+const WANTED_TABS: &[&str] = &["Home", "Videos", "Shorts", "Live", "Podcasts", "Releases", "Playlists", "Courses", "Shows"];
 
 impl ChannelPage {
     pub fn new(id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {

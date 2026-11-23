@@ -202,9 +202,31 @@ fn open_link(url: &str, window: &mut Window, cx: &mut App) {
 /// Selectable text (drag to select, Ctrl+C) with clickable links, timestamps,
 /// hashtags and handles. Right-click copies the whole text.
 pub fn rich_text(id: impl Into<ElementId>, text: String, cx: &App) -> AnyElement {
+    rich_text_with(id, text, &[], cx)
+}
+
+/// [`rich_text`] with channel emojis (shortcut, image URL) drawn inline as images.
+pub fn rich_text_with(id: impl Into<ElementId>, text: String, emojis: &[(String, String)], cx: &App) -> AnyElement {
     let p = pal(cx);
     let urls: Vec<String> = tokenize(&text).into_iter().filter_map(|(_, t)| if let Token::Url(u) = t { Some(u) } else { None }).collect();
-    let view = gpui_kit::base::TextView::markdown(id, to_markdown(&text))
+    let md = if emojis.is_empty() {
+        to_markdown(&text)
+    } else {
+        // swap each shortcut for a marker the Markdown conversion leaves alone,
+        // then the marker for an inline image
+        let mut marked = text.clone();
+        for (i, (code, _)) in emojis.iter().enumerate() {
+            marked = marked.replace(code.as_str(), &format!("\u{E000}{i}\u{E001}"));
+        }
+        let mut md = to_markdown(&marked);
+        for (i, (code, url)) in emojis.iter().enumerate() {
+            let alt: String = code.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+            let src: String = url.chars().filter(|c| !matches!(c, '<' | '>' | '"' | ' ')).collect();
+            md = md.replace(&format!("\u{E000}{i}\u{E001}"), &format!(r#"<img src="{src}" alt="{alt}" width="18" height="18" />"#));
+        }
+        md
+    };
+    let view = gpui_kit::base::TextView::markdown(id, md)
         .selectable(true)
         .on_link_click(|url, _, window, cx| open_link(url, window, cx));
     let copy_text = text.clone();
@@ -222,6 +244,23 @@ pub fn rich_text(id: impl Into<ElementId>, text: String, cx: &App) -> AnyElement
                 items.push(crate::ui::app::MenuItem::new("link", label, move |_, cx| crate::ui::copy_to_clipboard(u2.clone(), cx)));
             }
             crate::ui::app::open_menu(ev.position, items, window, cx);
+        })
+        .into_any_element()
+}
+
+/// A comment's text (with channel emojis) and the GIF or sticker posted with it.
+pub fn comment_body(id: impl Into<SharedString>, c: &crate::api::types::Comment, cx: &App) -> AnyElement {
+    let id: SharedString = id.into();
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(rich_text_with(id.clone(), c.text.clone(), &c.emojis, cx))
+        .when_some(c.image.clone(), |d, (url, ratio)| {
+            // at most 200px tall and 240px wide, aspect kept
+            let h = (240.0 / ratio).min(200.0);
+            let w = h * ratio;
+            d.child(img(SharedUri::from(url)).w(px(w)).h(px(h)).rounded_lg().object_fit(ObjectFit::Contain))
         })
         .into_any_element()
 }

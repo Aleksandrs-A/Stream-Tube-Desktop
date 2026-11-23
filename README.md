@@ -38,7 +38,9 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Nothing to install or keep updated: it isn't an ad blocker that YouTube can break, ads simply aren't part of how the app plays video
 
 **Watching**
-- Home, Shorts, Subscriptions, Explore categories, channels, playlists and search, with search suggestions and your recent searches
+- Home, Shorts, Subscriptions, Explore categories, channels (including their courses and shows), playlists and search, with search suggestions and your recent searches
+- A personal Home without an account: "For you" recommends videos related to what you've watched and searched in the app, mixed with new uploads from your subscriptions. Signed in, Home is your own YouTube Home feed
+- Shorts follow your account's recommendations when you're signed in, or start from the Shorts you watched last
 - libmpv player with hardware decoding, codec preference (AV1, VP9 or H.264), 360p up to 4K, enhanced bitrate, speed control (remembered per channel if you want), captions with adjustable size and background, chapters and seek-bar preview thumbnails
 - Resumes where you left off, remembers your last quality, autoplays the next video or loops, and plays whole playlists as a queue
 - A miniplayer while you browse, a picture-in-picture window, theater mode and fullscreen
@@ -47,7 +49,10 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Shorts in a vertical player that moves to the next one by itself, or open them in the regular player
 - Hold Space or press and hold on the video to play at 2x
 - Hover previews: rest the pointer on a thumbnail and it plays inside it, muted, with a seek bar to skip around
-- Most replayed graph with "jump ahead", ambient glow around the player, force original audio instead of auto-dubbing
+- Most replayed graph with "jump ahead", ambient glow around the player (on or off from the player's gear menu), force original audio instead of auto-dubbing
+- A screenshot button in the player bar
+- Comments sorted by Top, Timed or Newest. *Timed* works like youtube.com: comments that mention a moment of the video appear as playback reaches it
+- Comments show GIFs, stickers and channel emojis, and replies are drawn as threads, with answers to a reply nested under it
 - Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous)
 - Can hand a video off to an external player such as mpv or VLC
 - Right-click the video for loop, copy link (optionally at the current time), screenshot and **Stats for nerds**: resolution, codecs, dropped frames, hardware decoding, bitrate, buffer health and connection speed, updated live (also *Shift+I*)
@@ -146,16 +151,24 @@ release comes out (*Settings → About*).
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.4.0-alpha_amd64.deb
+sudo apt install ./streamtube_0.5.0-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.4.0-alpha.x86_64.rpm
+sudo dnf install ./streamtube-0.5.0-alpha.x86_64.rpm
 ```
 
-**Other Linux (x86_64)**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
+**Any Linux (x86_64), nothing to install**: download the AppImage, make it executable
+and run it. libmpv is inside, so video plays without installing anything else:
+
+```sh
+chmod +x StreamTube-0.5.0-alpha-x86_64.AppImage
+./StreamTube-0.5.0-alpha-x86_64.AppImage
+```
+
+**Other Linux (x86_64), installed for your user**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
 `./install.sh`. It puts the app in `~/.local/bin` and adds a menu entry.
 Video plays through libmpv, so install it if you don't have it:
 
@@ -194,7 +207,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.4.0-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.5.0-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in

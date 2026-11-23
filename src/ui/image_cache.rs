@@ -80,6 +80,9 @@ impl Slot {
 /// Downloads an image and decodes it (BGRA, like gpui), shrinking oversized ones.
 fn fetch_decode(url: &str) -> anyhow::Result<Arc<RenderImage>> {
     let bytes = crate::api::http::get_bytes(url, &[])?;
+    if let Some(frames) = animated(&bytes) {
+        return Ok(Arc::new(RenderImage::new(frames)));
+    }
     let img = image::load_from_memory(&bytes)?;
     let (w, h) = (img.width(), img.height());
     let mut rgba = if w > MAX_W || h > MAX_H {
@@ -93,6 +96,64 @@ fn fetch_decode(url: &str) -> anyhow::Result<Arc<RenderImage>> {
         px.swap(0, 2);
     }
     Ok(Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(rgba)])))
+}
+
+/// Animated images are kept this small (they're drawn at most 240px wide), cut
+/// off after this many frames, and shrunk further to fit a memory budget, so one
+/// GIF can't take much memory.
+const ANIM_MAX: u32 = 240;
+const ANIM_FRAMES: usize = 150;
+const ANIM_BUDGET: f32 = 6.0 * 1024.0 * 1024.0;
+
+/// Every frame of an animated GIF or WebP (BGRA, scaled down), or None for a still image.
+fn animated(bytes: &[u8]) -> Option<smallvec::SmallVec<[image::Frame; 1]>> {
+    use image::AnimationDecoder;
+    use std::io::Cursor;
+    let frames: Vec<image::Frame> = match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Gif => image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?.into_frames().take(ANIM_FRAMES).collect::<Result<_, _>>().ok()?,
+        image::ImageFormat::WebP => {
+            let d = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).ok()?;
+            if !d.has_animation() {
+                return None;
+            }
+            d.into_frames().take(ANIM_FRAMES).collect::<Result<_, _>>().ok()?
+        }
+        _ => return None,
+    };
+    if frames.len() < 2 {
+        return None;
+    }
+    // long animations keep every other frame, each shown twice as long
+    let step = if frames.len() > 40 { 2 } else { 1 };
+    let count = frames.len().div_ceil(step);
+    let (fw, fh) = frames[0].buffer().dimensions();
+    let fit = (ANIM_BUDGET / (count as f32 * 4.0 * fw.max(1) as f32 * fh.max(1) as f32)).sqrt();
+    let k = (ANIM_MAX as f32 / fw.max(1) as f32).min(ANIM_MAX as f32 / fh.max(1) as f32).min(fit).min(1.0);
+    Some(
+        frames
+            .into_iter()
+            .step_by(step)
+            .map(|f| {
+                let delay = if step == 1 {
+                    f.delay()
+                } else {
+                    let (n, d) = f.delay().numer_denom_ms();
+                    image::Delay::from_numer_denom_ms(n * step as u32, d)
+                };
+                let buf = f.into_buffer();
+                let (w, h) = buf.dimensions();
+                let mut buf = if k < 1.0 {
+                    image::imageops::resize(&buf, ((w as f32 * k) as u32).max(1), ((h as f32 * k) as u32).max(1), image::imageops::FilterType::Triangle)
+                } else {
+                    buf
+                };
+                for px in buf.chunks_exact_mut(4) {
+                    px.swap(0, 2);
+                }
+                image::Frame::from_parts(buf, 0, 0, delay)
+            })
+            .collect(),
+    )
 }
 
 /// Decoded images above this are freed, least recently shown first.
@@ -155,7 +216,7 @@ fn key(r: &Resource) -> u64 {
 
 fn size_of(img: &Arc<RenderImage>) -> usize {
     let s = img.size(0);
-    (s.width.0.max(0) as usize) * (s.height.0.max(0) as usize) * 4
+    (s.width.0.max(0) as usize) * (s.height.0.max(0) as usize) * 4 * img.frame_count().max(1)
 }
 
 impl ImageCache for LruImageCache {

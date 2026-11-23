@@ -22,6 +22,8 @@ enum Menu {
 
 pub struct PlayerView {
     player: Entity<Player>,
+    /// Repaints "Stats for nerds" every second while it's open (one task, not one per frame)
+    stats_tick: Option<Task<()>>,
     pub mini: bool,
     /// shown in the picture-in-picture window
     pub pip: bool,
@@ -47,6 +49,7 @@ impl PlayerView {
     pub fn new(player: Entity<Player>, mini: bool, cx: &mut Context<Self>) -> Self {
         let sub = cx.observe(&player, |_, _, cx| cx.notify());
         Self {
+            stats_tick: None,
             player,
             mini,
             pip: false,
@@ -970,6 +973,12 @@ impl PlayerView {
                     })),
                 )
             })
+            .when(!narrow && !self.player.read(cx).audio_only, |d| {
+                d.child(ctl_btn("c-shot", "camera").on_click(cx.listener(|this, _, _, cx| {
+                    this.player.update(cx, |p, cx| p.screenshot(cx));
+                    this.poke(cx);
+                })))
+            })
             .child(ctl_btn("c-settings", "settings").on_click(cx.listener(|this, _, _, cx| {
                 // a mouse-down here already closed an open menu (outside click); don't reopen it
                 let just_closed = this.menu_closed_at.elapsed() < std::time::Duration::from_millis(400);
@@ -1038,7 +1047,10 @@ impl PlayerView {
                     .items_center()
                     .justify_between()
                     .h_12()
-                    // keep clicks on the control row from reaching the click-to-pause layer
+                    // keep clicks on the control row from reaching the click-to-pause layer,
+                    // and presses from starting its press-and-hold 2x timer: the row eats
+                    // the release, so the layer would think the button is still held
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(left)
                     .child(right),
@@ -1048,11 +1060,23 @@ impl PlayerView {
     /// The "Stats for nerds" panel; refreshes itself every second while open.
     fn render_stats(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.player.read(cx).stats();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(1000)).await;
-            let _ = this.update(cx, |_, cx| cx.notify());
-        })
-        .detach();
+        if self.stats_tick.is_none() {
+            self.stats_tick = Some(cx.spawn(async move |this, cx| loop {
+                cx.background_executor().timer(Duration::from_millis(1000)).await;
+                let open = this.update(cx, |this, cx| {
+                    let open = this.player.read(cx).show_stats;
+                    if open {
+                        cx.notify();
+                    } else {
+                        this.stats_tick = None;
+                    }
+                    open
+                });
+                if !matches!(open, Ok(true)) {
+                    break;
+                }
+            }));
+        }
         let player = self.player.clone();
         div()
             .id("stats")
@@ -1191,6 +1215,19 @@ impl PlayerView {
                         row("m-ao".into(), Some("headphones"), "Audio only (background)".into(), Some(if audio_only { "On".into() } else { "Off".into() }), false)
                             .on_click(cx.listener(move |t, _, _, cx| t.player.update(cx, |p, cx| p.set_audio_only(!audio_only, cx)))),
                     )
+                    .child({
+                        let ambient = store::settings_snapshot().ambient_mode;
+                        row("m-amb".into(), Some("sun"), "Ambient mode".into(), Some(if ambient { "On".into() } else { "Off".into() }), false).on_click(cx.listener(move |t, _, _, cx| {
+                            store::update_settings(|s| s.ambient_mode = !ambient);
+                            t.player.update(cx, |p, cx| {
+                                if ambient {
+                                    p.ambient = None;
+                                }
+                                cx.notify()
+                            });
+                            cx.refresh_windows();
+                        }))
+                    })
                     .child(
                         row("m-l".into(), Some("repeat"), "Loop".into(), Some(if looping { "On".into() } else { "Off".into() }), false)
                             .on_click(cx.listener(move |t, _, _, cx| t.player.update(cx, |p, cx| { p.set_loop(!looping); cx.notify() }))),
@@ -1298,6 +1335,12 @@ impl PlayerView {
                 }
             }
         }
-        panel
+        div()
+            .id("player-menu-wrap")
+            .absolute()
+            .right_3()
+            .bottom(px(64.))
+            .on_scroll(|_, _, cx| cx.stop_propagation())
+            .child(panel.relative().right_0().bottom_0())
     }
 }

@@ -382,7 +382,7 @@ fn parse_lockup(l: &Value) -> Option<Item> {
                 ..Default::default()
             }))
         }
-        "LOCKUP_CONTENT_TYPE_PLAYLIST" | "LOCKUP_CONTENT_TYPE_PODCAST" | "LOCKUP_CONTENT_TYPE_ALBUM" => {
+        "LOCKUP_CONTENT_TYPE_PLAYLIST" | "LOCKUP_CONTENT_TYPE_PODCAST" | "LOCKUP_CONTENT_TYPE_ALBUM" | "LOCKUP_CONTENT_TYPE_COURSE" | "LOCKUP_CONTENT_TYPE_SHOW" => {
             let first_video_id = find(l, "watchEndpoint")
                 .and_then(|w| w.get("videoId"))
                 .and_then(Value::as_str)
@@ -538,15 +538,26 @@ pub fn search_continue(token: &str) -> Result<Page> {
 /// The Shorts player's own feed: a fresh, varied sequence each time.
 /// `token` is `None` for the first page, then the returned continuation.
 /// Items only carry ids; titles and channels come from `watch_next` when played.
-pub fn shorts_feed(token: Option<&str>) -> Result<(Vec<VideoItem>, Option<String>)> {
+/// The Shorts feed. With the browser sign-in it is the account's own Shorts
+/// recommendations; otherwise it starts from `seed` (a Short from the local
+/// history) so YouTube follows on from what was watched, or from nothing.
+pub fn shorts_feed(token: Option<&str>, seed: Option<&str>) -> Result<(Vec<VideoItem>, Option<String>)> {
+    let personal = crate::api::web::connected();
+    let call = |ep: &str, body: Value| if personal { crate::api::web::web_call(ep, body) } else { call(ep, body) };
     let mut ids: Vec<String> = Vec::new();
     let seq = match token {
         Some(t) => t.to_string(),
+        // a sequence that follows on from a Short: protobuf { 1: video id }
+        None if seed.is_some() && !personal => {
+            use base64::Engine;
+            let id = seed.unwrap_or_default();
+            let mut pb = vec![0x0a, id.len() as u8];
+            pb.extend(id.as_bytes());
+            base64::engine::general_purpose::URL_SAFE.encode(&pb)
+        }
         None => {
-            let r = call(
-                "reel/reel_item_watch",
-                json!({ "params": "CA8%3D", "disablePlayerResponse": true, "inputType": "REEL_WATCH_INPUT_TYPE_SEEDLESS" }),
-            )?;
+            let body = json!({ "params": "CA8%3D", "disablePlayerResponse": true, "inputType": "REEL_WATCH_INPUT_TYPE_SEEDLESS" });
+            let r = call("reel/reel_item_watch", body)?;
             if let Some(id) = r.pointer("/replacementEndpoint/reelWatchEndpoint/videoId").and_then(Value::as_str) {
                 ids.push(id.to_string());
             }
@@ -1075,12 +1086,43 @@ pub fn chapters_from_description(desc: &str) -> Vec<Chapter> {
 
 // ───────────────────────── comments ─────────────────────────
 
+/// Channel (custom) emojis in a comment's text. Standard emojis are left alone:
+/// they're already Unicode characters in the text.
+fn comment_emojis(props: &Value) -> Vec<(String, String)> {
+    let Some(content) = props.pointer("/content/content").and_then(Value::as_str) else { return Vec::new() };
+    let Some(runs) = props.pointer("/content/attachmentRuns").and_then(Value::as_array) else { return Vec::new() };
+    // run offsets count UTF-16 units
+    let units: Vec<u16> = content.encode_utf16().collect();
+    let mut out: Vec<(String, String)> = Vec::new();
+    for r in runs {
+        let Some(url) = r.pointer("/element/type/imageType/image/sources/0/url").and_then(Value::as_str) else { continue };
+        if url.contains("/s/gaming/emoji/") {
+            continue;
+        }
+        let start = r.get("startIndex").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let len = r.get("length").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let Some(span) = units.get(start..start + len) else { continue };
+        let code = String::from_utf16_lossy(span);
+        if code.trim().is_empty() || out.iter().any(|(c, _)| *c == code) {
+            continue;
+        }
+        // sharper than the 16px default, drawn at text size
+        let url = match url.rsplit_once('=') {
+            Some((base, _)) if url.contains("googleusercontent.com") || url.contains("ggpht.com") => format!("{base}=w40-h40-c-k-nd"),
+            _ => url.to_string(),
+        };
+        out.push((code, url));
+    }
+    out
+}
+
 pub fn comments(token: &str) -> Result<CommentPage> {
     let r = call("next", json!({ "continuation": token }))?;
     let mut page = CommentPage::default();
     // entity payloads
     let mut payloads = std::collections::HashMap::new();
     let mut toolbar_states = std::collections::HashMap::new();
+    let mut surfaces = std::collections::HashMap::new();
     if let Some(muts) = r.pointer("/frameworkUpdates/entityBatchUpdate/mutations").and_then(Value::as_array) {
         for m in muts {
             let key = m.get("entityKey").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -1088,6 +1130,8 @@ pub fn comments(token: &str) -> Result<CommentPage> {
                 payloads.insert(key, p.clone());
             } else if let Some(p) = m.pointer("/payload/engagementToolbarStateEntityPayload") {
                 toolbar_states.insert(key, p.clone());
+            } else if let Some(p) = m.pointer("/payload/commentSurfaceEntityPayload") {
+                surfaces.insert(key, p.clone());
             }
         }
     }
@@ -1161,6 +1205,17 @@ pub fn comments(token: &str) -> Result<CommentPage> {
                     is_verified: author.get("isVerified").and_then(Value::as_bool).unwrap_or(false),
                     is_pinned: vm.get("pinnedText").is_some(),
                     hearted,
+                    emojis: comment_emojis(&props),
+                    image: vm
+                        .get("commentSurfaceKey")
+                        .and_then(Value::as_str)
+                        .and_then(|k| surfaces.get(k))
+                        .and_then(|s| s.pointer("/imageAttachmentViewModel/commentImageAttachmentViewModel"))
+                        .and_then(|a| {
+                            let url = a.pointer("/image/sources/0/url")?.as_str()?.to_string();
+                            let ratio = a.get("aspectRatio").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+                            Some((url, ratio.clamp(0.2, 5.0)))
+                        }),
                 });
             }
         }

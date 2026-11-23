@@ -319,7 +319,23 @@ pub fn friendly_error(err: &str) -> String {
     if ["dns", "timed out", "timeout", "connect", "network", "resolve"].iter().any(|k| lower.contains(k)) {
         return "Couldn't reach YouTube. Check your connection.".into();
     }
+    if lower.contains("recording is not available") {
+        return "This live stream has ended and its recording isn't available.".into();
+    }
+    if lower.contains("premieres in") || lower.contains("live event will begin") {
+        return "This hasn't started yet.".into();
+    }
+    if lower.contains("members-only") || lower.contains("join this channel") {
+        return "This video is for channel members only.".into();
+    }
+    if lower.contains("private video") {
+        return "This video is private.".into();
+    }
     let line = err.lines().next().unwrap_or(err).trim();
+    // which YouTube client failed is a detail, not news
+    let line = ["visionOS: ", "Android VR: ", "Innertube: ", "yt-dlp: "]
+        .iter()
+        .fold(line, |l, p| l.strip_prefix(p).unwrap_or(l));
     if line.chars().count() > 160 { format!("{}…", line.chars().take(160).collect::<String>()) } else { line.to_string() }
 }
 

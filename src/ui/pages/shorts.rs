@@ -6,7 +6,7 @@ use crate::player::controller::player;
 use crate::store;
 use crate::ui::app::{Route, UiState, navigate};
 use crate::ui::*;
-use crate::ui::widgets::{Load, rich_text};
+use crate::ui::widgets::{Load, comment_body};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -29,6 +29,8 @@ pub struct ShortsPage {
     comments: Option<Load<CommentPage>>,
     comments_for: String,
     comments_more: bool,
+    /// where the comments panel was drawn: the wheel scrolls comments there, not Shorts
+    comments_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     _sub: Subscription,
 }
 
@@ -60,6 +62,7 @@ impl ShortsPage {
             comments: None,
             comments_for: String::new(),
             comments_more: false,
+            comments_bounds: Default::default(),
             _sub: sub,
         };
         if let Some(id) = &start {
@@ -69,8 +72,12 @@ impl ShortsPage {
         let start2 = start.clone();
         cx.spawn(async move |this, cx| {
             let res = blocking(move || {
-                // YouTube's own Shorts sequence: different on every visit
-                if let Ok((items, cont)) = innertube::shorts_feed(None) {
+                // YouTube's own Shorts sequence: the account's recommendations with the
+                // browser sign-in, otherwise one that follows on from the last Short watched
+                let seed = crate::store::history_list("", 60).into_iter().find(|h| h.video.is_short).map(|h| h.video.id);
+                let seeded = seed.as_deref().and_then(|s| innertube::shorts_feed(None, Some(s)).ok());
+                let feed = seeded.filter(|(i, _)| !i.is_empty()).or_else(|| innertube::shorts_feed(None, None).ok());
+                if let Some((items, cont)) = feed {
                     if !items.is_empty() {
                         return (items, cont, true);
                     }
@@ -150,7 +157,7 @@ impl ShortsPage {
                 cx.spawn(async move |this, cx| {
                     let res = blocking(move || {
                         if reel {
-                            innertube::shorts_feed(Some(&tok))
+                            innertube::shorts_feed(Some(&tok), None)
                         } else {
                             innertube::search_continue(&tok).map(|p| {
                                 let items = p
@@ -467,6 +474,9 @@ impl Render for ShortsPage {
                 // A touchpad swipe is a stream of small deltas and a wheel notch one big one.
                 // Sum them, move one Short past a threshold, and ignore the rest of that
                 // gesture (it ends after a short pause).
+                if this.show_comments && this.comments_bounds.get().contains(&window.mouse_position()) {
+                    return;
+                }
                 let dy: f32 = ev.delta.pixel_delta(window.line_height()).y.into();
                 if this.last_wheel.elapsed() > Duration::from_millis(220) {
                     this.wheel_acc = 0.0;
@@ -548,7 +558,16 @@ impl Render for ShortsPage {
                         navigate(Route::Watch { id: watch_id.clone(), playlist: None, start: None }, window, cx)
                     })),
             )
-            .when(self.show_comments, |d| d.child(comments_panel))
+            .when(self.show_comments, |d| {
+                let b = self.comments_bounds.clone();
+                d.child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .child(canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {}).absolute().size_full())
+                        .child(comments_panel),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -583,7 +602,7 @@ fn comment_row(c: &Comment, cx: &App) -> AnyElement {
                         .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(c.author.clone()))
                         .child(div().text_color(p.text2).child(c.published.clone())),
                 )
-                .child(div().text_sm().text_color(p.text).child(rich_text(SharedString::from(format!("sct-{}", c.id)), c.text.clone(), cx)))
+                .child(div().text_sm().text_color(p.text).child(comment_body(format!("sct-{}", c.id), c, cx)))
                 .child(
                     div()
                         .flex()

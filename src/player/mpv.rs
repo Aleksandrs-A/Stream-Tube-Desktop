@@ -87,6 +87,14 @@ fn lib() -> Result<&'static (Library, Fns)> {
             if let Some(d) = exe.parent() {
                 candidates.push(d.join("libmpv-2.dll"));
                 candidates.push(d.join("mpv-2.dll"));
+                // the AppImage carries its own libmpv in usr/lib, next to usr/bin
+                #[cfg(target_os = "linux")]
+                for name in ["libmpv.so.2", "libmpv.so.1"] {
+                    let p = d.join("../lib").join(name);
+                    if p.is_file() {
+                        candidates.push(p);
+                    }
+                }
             }
         }
         #[cfg(windows)]

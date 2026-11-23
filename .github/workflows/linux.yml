@@ -100,6 +100,41 @@ jobs:
           echo "deb=$deb" >> "$GITHUB_OUTPUT"
           echo "rpm=$rpm" >> "$GITHUB_OUTPUT"
 
+      - name: Build AppImage
+        id: appimage
+        run: |
+          # libmpv (and everything it links against) goes inside, so the AppImage
+          # plays video on any distribution without installing anything
+          sudo apt-get install -y --no-install-recommends libmpv1 file desktop-file-utils
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          out="dist/StreamTube-${version}-x86_64.AppImage"
+          wget -q -O linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy
+
+          app=AppDir
+          install -Dm755 target/release/streamtube "$app/usr/bin/streamtube"
+          strip "$app/usr/bin/streamtube"
+          install -Dm644 packaging/linux/streamtube.desktop "$app/usr/share/applications/streamtube.desktop"
+          install -Dm644 assets/logo.png "$app/usr/share/icons/hicolor/256x256/apps/streamtube.png"
+          install -Dm644 assets/logo.svg "$app/usr/share/icons/hicolor/scalable/apps/streamtube.svg"
+          install -Dm644 LICENSE "$app/usr/share/doc/streamtube/LICENSE"
+          desktop-file-validate "$app/usr/share/applications/streamtube.desktop" || true
+
+          mpv=$(ls /usr/lib/x86_64-linux-gnu/libmpv.so.2 /usr/lib/x86_64-linux-gnu/libmpv.so.1 2>/dev/null | head -1)
+          echo "bundling $mpv"
+          # no FUSE on the runner: let the tool unpack itself
+          export APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 LDAI_OUTPUT="$out"
+          ./linuxdeploy --appdir "$app" --library "$mpv" --output appimage
+
+          # libmpv and its libraries are inside, and nothing it needs is missing
+          ls "$app/usr/lib" | grep -E '^libmpv\.so'
+          if LD_LIBRARY_PATH="$app/usr/lib" ldd "$app/usr/lib/$(basename "$mpv")" | grep "not found"; then
+            echo "libmpv is missing libraries"; exit 1
+          fi
+          chmod +x "$out"
+          ls -l "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+
       - name: Check the .deb installs
         run: |
           sudo apt-get install -y "./${{ steps.native.outputs.deb }}"
@@ -113,10 +148,11 @@ jobs:
             ${{ steps.pkg.outputs.file }}
             ${{ steps.native.outputs.deb }}
             ${{ steps.native.outputs.rpm }}
+            ${{ steps.appimage.outputs.file }}
 
       - name: Attach to the release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" "${{ steps.pkg.outputs.file }}" "${{ steps.native.outputs.deb }}" "${{ steps.native.outputs.rpm }}" --clobber
+          gh release upload "${{ github.event.release.tag_name }}" "${{ steps.pkg.outputs.file }}" "${{ steps.native.outputs.deb }}" "${{ steps.native.outputs.rpm }}" "${{ steps.appimage.outputs.file }}" --clobber

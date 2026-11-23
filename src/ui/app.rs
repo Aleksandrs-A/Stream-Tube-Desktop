@@ -2580,10 +2580,15 @@ impl Render for AppView {
                     ),
             )
             .when(has_slot, |d| d.child(crate::ui::slot::SlotFollower::new(cx, self.main_view.clone().into())))
-            .when(crate::player::preview::showing(cx).is_some(), |d| {
-                let slot = cx.global::<crate::player::preview::PreviewSlot>().0.clone();
-                d.child(crate::ui::slot::SlotFollower::with_slot(slot, self.preview_view.clone().into()))
-            });
+            // only over a thumbnail drawn on this page (the slot is cleared when a
+            // preview stops or moves to another video)
+            .when(
+                crate::player::preview::showing(cx).is_some() && cx.global::<crate::player::preview::PreviewSlot>().0.get().is_some(),
+                |d| {
+                    let slot = cx.global::<crate::player::preview::PreviewSlot>().0.clone();
+                    d.child(crate::ui::slot::SlotFollower::with_slot(slot, self.preview_view.clone().into()))
+                },
+            );
         if fullscreen {
             root = root.child(page_area.size_full());
         } else {
