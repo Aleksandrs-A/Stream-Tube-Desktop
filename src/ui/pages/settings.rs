@@ -63,7 +63,7 @@ impl SettingsPage {
             ("sb_server", s.sponsorblock_server.clone(), "https://sponsor.ajay.app", |s, v| s.sponsorblock_server = v),
             ("ytdlp", s.ytdlp_path.clone(), "yt-dlp (from PATH)", |s, v| s.ytdlp_path = v),
             ("proxy", s.proxy.clone(), "e.g. socks5://127.0.0.1:9050 or http://host:port", |s, v| s.proxy = v),
-            ("external", s.external_player.clone(), "mpv (from PATH) or full path to vlc.exe", |s, v| s.external_player = v),
+            ("external", s.external_player.clone(), "Automatic", |s, v| s.external_player = v),
             ("download_dir", s.download_dir.clone(), "Download folder", |s, v| s.download_dir = v),
             ("captions_lang", s.captions_lang.clone(), "en", |s, v| s.captions_lang = v),
             ("sb_min", format!("{}", s.sb_min_duration), "0", |s, v| s.sb_min_duration = v.parse().unwrap_or(0.0)),
@@ -618,7 +618,15 @@ impl SettingsPage {
             .child(row("Hide controls after", "", self.choice("hide", &[(1500u64, "1.5s"), (2500, "2.5s"), (4000, "4s"), (8000, "8s")], s.controls_hide_ms, |s, v| s.controls_hide_ms = v, cx), cx))
             .child(row("Seek bar preview thumbnails", "", switch("sbprev", s.show_storyboard, |s, v| s.show_storyboard = v, cx), cx))
             .child(row("Arrow key seek step", "", self.choice("step", &[(5.0f64, "5s"), (10.0, "10s"), (15.0, "15s"), (30.0, "30s")], s.seek_step, |s, v| s.seek_step = v, cx), cx))
-            .child(row("External player", "Used by “Open in external player”", text_field(&self.input("external"), 320., cx), cx))
+            .child(row(
+                "External player",
+                &match crate::downloads::detect_player() {
+                    Some((name, _)) => format!("Leave empty to use {name}, which is installed. Or enter the path to another player"),
+                    None => "Leave empty to use VLC or mpv when installed, or your default player. Or enter the path to another player".to_string(),
+                },
+                text_field(&self.input("external"), 320., cx),
+                cx,
+            ))
 
     }
 

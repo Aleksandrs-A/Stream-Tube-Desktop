@@ -381,26 +381,139 @@ pub fn open_external(id: &str, cx: &mut App) {
 }
 
 pub fn open_external_at(id: &str, time: f64, cx: &mut App) {
+    let custom = store::settings_snapshot().external_player.trim().to_string();
+    let id = id.to_string();
+    toast(cx, "Opening in your video player…");
+    cx.spawn(async move |cx| {
+        let res = crate::ui::blocking(move || launch_external(&id, time, &custom)).await;
+        let _ = cx.update(|cx| match res {
+            Ok(name) => toast(cx, format!("Playing in {name}. Keep Stream Tube open while it plays")),
+            Err(e) => toast(cx, format!("Couldn't open a video player: {e}")),
+        });
+    })
+    .detach();
+}
+
+/// The external player "Automatic" would use: VLC or mpv when installed.
+pub fn detect_player() -> Option<(&'static str, String)> {
+    let on_path = |exe: &str| -> Option<String> {
+        let name = if cfg!(windows) { format!("{exe}.exe") } else { exe.to_string() };
+        std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(&name)).find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
+    };
+    let mut found: Vec<(&'static str, String)> = Vec::new();
+    if cfg!(windows) {
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Some(root) = std::env::var_os(var) {
+                let p = std::path::Path::new(&root).join("VideoLAN").join("VLC").join("vlc.exe");
+                if p.is_file() {
+                    found.push(("VLC", p.to_string_lossy().into_owned()));
+                }
+            }
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let p = std::path::Path::new(&local).join("Programs").join("mpv").join("mpv.exe");
+            if p.is_file() {
+                found.push(("mpv", p.to_string_lossy().into_owned()));
+            }
+        }
+    }
+    found.extend(on_path("vlc").map(|p| ("VLC", p)));
+    found.extend(on_path("mpv").map(|p| ("mpv", p)));
+    found.extend(on_path("celluloid").map(|p| ("Celluloid", p)));
+    found.into_iter().next()
+}
+
+/// Resolves the streams and starts a player on them. The streams are served by the
+/// app's local proxy (YouTube refuses the open-ended requests media players make),
+/// so playback keeps working only while Stream Tube is open.
+fn launch_external(id: &str, time: f64, custom: &str) -> anyhow::Result<String> {
+    let info = streams::get_streams(id)?;
     let s = store::settings_snapshot();
-    let player = if s.external_player.trim().is_empty() { "mpv".to_string() } else { s.external_player.clone() };
-    let url = format!("https://www.youtube.com/watch?v={id}");
-    let mut cmd = Command::new(&player);
-    let lower = player.to_lowercase();
-    if lower.contains("mpv") {
-        if time > 1.0 {
-            cmd.arg(format!("--start={}", time as u64));
+    // H.264 + AAC plays in every player
+    let (v, a) = streams::pick_formats(&info, s.default_quality, "h264", None);
+    let local = |f: &crate::api::types::StreamFormat| crate::player::proxy::local_url(&f.url, f.content_length, &f.mime);
+    let live = info.is_live || (info.video.is_empty() && info.muxed.is_empty());
+    let hls = info.hls_url.as_deref().map(|u| crate::player::proxy::local_hls(u, s.default_quality, None));
+    let (video, audio) = if live || info.hls_only {
+        (hls.clone().ok_or_else(|| anyhow::anyhow!("no stream for this video"))?, None)
+    } else {
+        match (v, a) {
+            (Some(v), a) => (local(v), a.map(local)),
+            (None, Some(a)) => (local(a), None),
+            _ => (info.muxed.last().map(local).ok_or_else(|| anyhow::anyhow!("no stream for this video"))?, None),
         }
-        if let Some(y) = streams::ytdlp_path() {
-            cmd.arg(format!("--script-opts=ytdl_hook-ytdl_path={y}"));
+    };
+    // at the very end there's nothing left to play: start from the top
+    let start = (time > 1.0 && (info.length_secs == 0 || time + 5.0 < info.length_secs as f64)).then_some(time as u64);
+    let title = info.title.clone();
+
+    let (name, exe) = if custom.is_empty() {
+        match detect_player() {
+            Some((n, p)) => (n.to_string(), p),
+            None => return open_with_default(&info, start),
         }
-    } else if lower.contains("vlc") && time > 1.0 {
-        cmd.arg(format!("--start-time={}", time as u64));
+    } else {
+        let n = std::path::Path::new(custom).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| custom.to_string());
+        (n, custom.to_string())
+    };
+    let lower = exe.to_lowercase();
+    let mut cmd = Command::new(&exe);
+    if lower.contains("vlc") {
+        if let Some(a) = &audio {
+            cmd.arg(format!("--input-slave={a}"));
+        }
+        if let Some(t) = start {
+            cmd.arg(format!("--start-time={t}"));
+        }
+        cmd.arg(format!("--meta-title={title}")).arg(&video);
+    } else if lower.contains("celluloid") {
+        if let Some(a) = &audio {
+            cmd.arg(format!("--mpv-audio-file={a}"));
+        }
+        if let Some(t) = start {
+            cmd.arg(format!("--mpv-start={t}"));
+        }
+        cmd.arg(&video);
+    } else if lower.contains("mpv") {
+        if let Some(a) = &audio {
+            cmd.arg(format!("--audio-file={a}"));
+        }
+        if let Some(t) = start {
+            cmd.arg(format!("--start={t}"));
+        }
+        cmd.arg(format!("--force-media-title={title}")).arg(&video);
+    } else {
+        // any other player: one stream with sound
+        let one = match (&audio, info.muxed.last()) {
+            (Some(_), Some(m)) => local(m),
+            _ => video.clone(),
+        };
+        cmd.arg(one);
     }
-    cmd.arg(&url);
-    match cmd.spawn() {
-        Ok(_) => toast(cx, format!("Opened in {player}")),
-        Err(e) => toast(cx, format!("Could not launch {player}: {e}. Set the path in Settings → Player.")),
+    cmd.spawn().map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
+    Ok(name)
+}
+
+/// No known player installed: a playlist with one stream (video and sound
+/// together), opened by whatever the system uses for playlists.
+fn open_with_default(info: &crate::api::types::StreamInfo, start: Option<u64>) -> anyhow::Result<String> {
+    let s = store::settings_snapshot();
+    let url = if info.is_live || info.hls_only {
+        info.hls_url.as_deref().map(|u| crate::player::proxy::local_hls(u, s.default_quality, None))
+    } else {
+        info.muxed.last().map(|m| crate::player::proxy::local_url(&m.url, m.content_length, &m.mime))
     }
+    .ok_or_else(|| anyhow::anyhow!("this video has no stream a default player can open. Install VLC or mpv"))?;
+    let mut m3u = format!("#EXTM3U\n#EXTINF:{},{}\n", info.length_secs, info.title.replace(['\n', '\r'], " "));
+    if let Some(t) = start {
+        m3u.push_str(&format!("#EXTVLCOPT:start-time={t}\n"));
+    }
+    m3u.push_str(&url);
+    m3u.push('\n');
+    let path = std::env::temp_dir().join("streamtube-play.m3u");
+    std::fs::write(&path, m3u)?;
+    open::that(&path)?;
+    Ok("your default player".into())
 }
 
 /// Removes a finished/failed job from the list (the file stays).
