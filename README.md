@@ -103,6 +103,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Seven accent colours used across the app, and the app icon changes colour to match, on the taskbar and on your desktop shortcuts too
 - Interface scaling, density, thumbnail corner style, grid columns, start page, language and region
 - Smooth page, dialog and menu transitions, and mouse-wheel scrolling that glides instead of jumping
+- Scrollbars you can drag (shown on hover, or always), and pages scroll from the keyboard too: Page Up/Down, Home/End, the arrow keys and Space
 
 **Keeps itself up to date**
 - Checks for new releases at startup and installs them in one click, and can update yt-dlp for you. Every download is checked against its SHA-256 before it is used

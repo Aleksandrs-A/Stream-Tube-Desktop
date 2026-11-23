@@ -1818,6 +1818,16 @@ impl AppView {
         if window.focused(cx).map(|f| f != self.focus).unwrap_or(false) {
             return;
         }
+        // scrolling from the keyboard: PageUp/PageDown everywhere; the arrows,
+        // Home/End and Space too on pages without a big player (on the watch page
+        // they seek, change the volume and pause)
+        let watching = matches!(self.route, Route::Watch { .. } | Route::Shorts(_));
+        let scroll_key = matches!(k, "pageup" | "pagedown")
+            || (!watching && matches!(k, "up" | "down" | "home" | "end"))
+            || (!watching && k == "space" && player(cx).read(cx).video.is_none());
+        if scroll_key && crate::ui::widgets::scroll_page_key(k, m.shift, window) {
+            return;
+        }
         let p = player(cx);
         if p.read(cx).video.is_none() {
             return;

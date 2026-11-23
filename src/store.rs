@@ -122,6 +122,8 @@ pub struct Settings {
     pub hover_preview: bool,
     /// show archived annotations (notes and links YouTube removed in 2019)
     pub annotations: bool,
+    /// keep page scrollbars on screen instead of showing them on hover
+    pub always_scrollbars: bool,
 }
 
 impl Default for Settings {
@@ -165,6 +167,7 @@ impl Default for Settings {
             sb_min_duration: 0.0,
             sb_notify: true,
             annotations: true,
+            always_scrollbars: false,
             dearrow_titles: false,
             dearrow_thumbnails: false,
             ryd: true,
