@@ -147,25 +147,27 @@ This is an early alpha, so expect rough edges.
 **Windows 10/11 (64-bit)**: run `StreamTube-<version>-setup.exe`. It installs for
 your user only, so no administrator prompt, and the app updates itself when a new
 release comes out (*Settings → About*).
+To run it without installing, unzip `StreamTube-<version>-windows-x64.zip` and run
+`streamtube.exe`.
 
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.5.0-alpha_amd64.deb
+sudo apt install ./streamtube_0.5.1-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.5.0-alpha.x86_64.rpm
+sudo dnf install ./streamtube-0.5.1-alpha.x86_64.rpm
 ```
 
 **Any Linux (x86_64), nothing to install**: download the AppImage, make it executable
 and run it. libmpv is inside, so video plays without installing anything else:
 
 ```sh
-chmod +x StreamTube-0.5.0-alpha-x86_64.AppImage
-./StreamTube-0.5.0-alpha-x86_64.AppImage
+chmod +x StreamTube-0.5.1-alpha-x86_64.AppImage
+./StreamTube-0.5.1-alpha-x86_64.AppImage
 ```
 
 **Other Linux (x86_64), installed for your user**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
@@ -180,6 +182,20 @@ sudo pacman -S mpv            # Arch
 
 Downloads above 360p need yt-dlp and FFmpeg. On Windows the app offers to fetch
 both the first time you need them. On Linux, install them with your package manager.
+
+### Verifying a download
+
+Every file on a release is built by the public [Release workflow](.github/workflows/release.yml)
+on GitHub's runners. Each release lists the files' SHA-256 checksums in `SHA256SUMS.txt`,
+and each file has a signed build provenance attestation that ties it to the workflow
+run that built it. With the [GitHub CLI](https://cli.github.com):
+
+```sh
+gh attestation verify StreamTube-0.5.1-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
+```
+
+Releases are immutable once published, so their files can't be swapped afterwards.
+The in-app updater also checks the installer's SHA-256 before running it.
 
 ## Building
 
@@ -207,7 +223,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.5.0-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.5.1-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in
