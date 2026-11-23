@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6" alt="Windows, Linux and macOS">
-  <img src="https://img.shields.io/github/v/release/Avaneesh-Inamdar/Stream-Tube-Desktop?include_prereleases&label=release" alt="Latest release">
+  <img src="https://img.shields.io/github/v/release/Avaneesh-Inamdar/Stream-Tube-Desktop?include_prereleases&sort=semver&label=release" alt="Latest release">
   <a href="https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/releases"><img src="https://img.shields.io/github/downloads/Avaneesh-Inamdar/Stream-Tube-Desktop/total?label=downloads&color=FF0033&cacheSeconds=3600" alt="Total downloads"></a>
   <img src="https://img.shields.io/badge/built%20with-Rust-B7410E" alt="Rust">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
@@ -21,6 +21,8 @@
 > **Community branch — not maintained or tested by the project owner.**
 > The macOS (Apple Silicon) support on this branch was contributed by
 > [William Wessex](https://github.com/wwessex) ([pull request #22](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/pull/22)).
+> The maintainer doesn't have a Mac, so keeping this branch up to date with each
+> release and packaging it was done with the help of AI.
 > It has not been built, run or reviewed on a Mac by the maintainer, it is not part
 > of any official release, and it may lag behind `main`. Use it at your own risk.
 > Official builds are Windows and Linux only.
@@ -49,6 +51,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 **Watching**
 - Home, Shorts, Subscriptions, Explore categories, channels (including their courses and shows), playlists and search, with search suggestions and your recent searches
 - A personal Home without an account: "For you" recommends videos related to what you've watched and searched in the app, mixed with new uploads from your subscriptions. Signed in, Home is your own YouTube Home feed
+- A *Recently uploaded* chip on Home, like youtube.com's: videos from your Home feed and subscriptions uploaded in the last two weeks, newest first
 - Tabs: Ctrl+click anything (or *Open in new tab* in a video's menu) to open it in the background, and switch with Ctrl+Tab, Ctrl+1…9 or a click. Ctrl+T opens a new tab, Ctrl+W or a middle click closes one
 - Videos made for kids (YouTube Kids) play and download like any other video
 - Old video annotations are back: notes, speech bubbles and clickable links from YouTube's annotation archive, drawn over the video where they used to be (turn them off in *Settings → Player* or from the player's gear menu)
@@ -179,21 +182,21 @@ Windows doesn't have one.
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.7.1-alpha_amd64.deb
+sudo apt install ./streamtube_0.7.2-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.7.1-alpha.x86_64.rpm
+sudo dnf install ./streamtube-0.7.2-alpha.x86_64.rpm
 ```
 
 **Any Linux (x86_64), nothing to install**: download the AppImage, make it executable
 and run it. libmpv is inside, so video plays without installing anything else:
 
 ```sh
-chmod +x StreamTube-0.7.1-alpha-x86_64.AppImage
-./StreamTube-0.7.1-alpha-x86_64.AppImage
+chmod +x StreamTube-0.7.2-alpha-x86_64.AppImage
+./StreamTube-0.7.2-alpha-x86_64.AppImage
 ```
 
 **Other Linux (x86_64), installed for your user**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
@@ -206,8 +209,8 @@ sudo dnf install mpv-libs     # Fedora
 sudo pacman -S mpv            # Arch
 ```
 
-**macOS (Apple Silicon), unofficial.** Releases may include a
-`StreamTube-<version>-macos-arm64-UNOFFICIAL.zip`. It is built from the
+**macOS (Apple Silicon), unofficial.** A community build is published separately
+on the Releases page as *macOS … (UNOFFICIAL community build)*. It is built from the
 [`community/macos-apple-silicon`](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/tree/community/macos-apple-silicon)
 branch, contributed by [William Wessex](https://github.com/wwessex). It is **not
 made or tested by the maintainer** and isn't supported: use it at your own risk.
@@ -233,7 +236,7 @@ and each file has a signed build provenance attestation that ties it to the work
 run that built it. With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify StreamTube-0.7.1-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
+gh attestation verify StreamTube-0.7.2-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
 ```
 
 Releases are immutable once published, so their files can't be swapped afterwards.
@@ -265,7 +268,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.7.1-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.7.2-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in

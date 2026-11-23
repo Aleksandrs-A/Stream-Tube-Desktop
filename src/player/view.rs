@@ -210,6 +210,11 @@ impl Render for PlayerView {
                     this.press = None;
                     this.player.update(cx, |p, _| p.end_boost());
                 }
+                // a seek or volume drag whose release we missed (something under
+                // the pointer kept it) ends here, where the button was last held
+                if (this.drag_seek.is_some() || this.drag_vol) && ev.pressed_button != Some(MouseButton::Left) {
+                    this.finish_drag(cx);
+                }
                 if let Some(_) = this.drag_seek {
                     let f = Self::frac_in(this.seek_bounds.get(), ev.position.x);
                     this.drag_seek = Some(f);
@@ -245,29 +250,11 @@ impl Render for PlayerView {
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                    if let Some(f) = this.drag_seek.take() {
-                        this.player.update(cx, |p, _| {
-                            let d = p.duration;
-                            p.seek_to(f as f64 * d)
-                        });
-                    }
-                    this.drag_vol = false;
-                    cx.notify();
-                }),
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.finish_drag(cx)),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                    if let Some(f) = this.drag_seek.take() {
-                        this.player.update(cx, |p, _| {
-                            let d = p.duration;
-                            p.seek_to(f as f64 * d)
-                        });
-                    }
-                    this.drag_vol = false;
-                    cx.notify();
-                }),
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.finish_drag(cx)),
             )
             .child(surface);
 
@@ -1174,7 +1161,12 @@ impl PlayerView {
                 div()
                     .id("seek-wrap")
                     .py_2()
-                    .on_click(|_, _, cx| cx.stop_propagation())
+                    // the click is the bar's release; it's kept from the pause layer,
+                    // so the seek it ends is finished here
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.finish_drag(cx);
+                    }))
                     .child(bar),
             )
             .child(
@@ -1192,6 +1184,18 @@ impl PlayerView {
                     .child(left)
                     .child(right),
             )
+    }
+
+    /// Ends a seek-bar or volume drag: seeks to where the bar was let go.
+    fn finish_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(f) = self.drag_seek.take() {
+            self.player.update(cx, |p, _| {
+                let d = p.duration;
+                p.seek_to(f as f64 * d)
+            });
+        }
+        self.drag_vol = false;
+        cx.notify();
     }
 
     /// The "Stats for nerds" panel; refreshes itself every second while open.
