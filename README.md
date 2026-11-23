@@ -53,7 +53,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - A screenshot button in the player bar
 - Comments sorted by Top, Timed or Newest. *Timed* works like youtube.com: comments that mention a moment of the video appear as playback reaches it
 - Comments show GIFs, stickers and channel emojis, and replies are drawn as threads, with answers to a reply nested under it
-- Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous)
+- Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous, and Ctrl+←/→ for the previous/next chapter)
 - Can hand a video off to an external player such as mpv or VLC
 - Right-click the video for loop, copy link (optionally at the current time), screenshot and **Stats for nerds**: resolution, codecs, dropped frames, hardware decoding, bitrate, buffer health and connection speed, updated live (also *Shift+I*)
 

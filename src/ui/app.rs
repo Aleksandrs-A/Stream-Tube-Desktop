@@ -1464,6 +1464,18 @@ impl AppView {
             window.focus(&fh, cx);
             return;
         }
+        // Ctrl+Left / Ctrl+Right: previous / next chapter (not while typing)
+        if m.control && !m.shift && (k == "left" || k == "right") && window.focused(cx).map(|f| f == self.focus).unwrap_or(true) {
+            let p = player(cx);
+            if p.read(cx).video.is_some() {
+                p.update(cx, |pl: &mut Player, cx| {
+                    if pl.seek_chapter(if k == "right" { 1 } else { -1 }) {
+                        cx.notify();
+                    }
+                });
+            }
+            return;
+        }
         if m.control || m.platform || m.alt {
             return;
         }

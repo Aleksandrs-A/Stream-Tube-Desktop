@@ -1031,6 +1031,19 @@ impl Player {
         cx.notify();
     }
 
+    /// Jumps to the start of the next (`dir` > 0) or previous chapter, as Ctrl+Right
+    /// and Ctrl+Left do on YouTube. False when there is no chapter that way.
+    pub fn seek_chapter(&mut self, dir: i32) -> bool {
+        let starts: Vec<f64> = self.chapters.iter().map(|c| c.start).collect();
+        match chapter_target(&starts, self.time, dir) {
+            Some(t) => {
+                self.seek_to(t);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn current_chapter(&self) -> Option<&Chapter> {
         self.chapters.iter().rev().find(|c| c.start <= self.time + 0.01)
     }
@@ -1110,5 +1123,33 @@ mod caption_tests {
         assert_eq!(super::mpv_color(0xFFFF00, 100), "#FFFFFF00");
         assert_eq!(super::mpv_color(0x000000, 75), "#BF000000");
         assert_eq!(super::mpv_color(0x123456, 0), "#00123456");
+    }
+}
+
+/// Where a chapter jump from `now` lands: the next chapter's start (`dir` > 0), or
+/// the previous chapter's start (in the first chapter, its own start).
+fn chapter_target(starts: &[f64], now: f64, dir: i32) -> Option<f64> {
+    let now = now + 0.01;
+    if dir > 0 {
+        return starts.iter().copied().find(|&s| s > now);
+    }
+    let cur = starts.iter().rposition(|&s| s <= now)?;
+    Some(starts[cur.saturating_sub(1)])
+}
+
+#[cfg(test)]
+mod chapter_tests {
+    use super::chapter_target;
+
+    #[::core::prelude::v1::test]
+    fn jumps() {
+        let c = [0.0, 60.0, 120.0];
+        assert_eq!(chapter_target(&c, 30.0, 1), Some(60.0));
+        assert_eq!(chapter_target(&c, 60.0, 1), Some(120.0));
+        assert_eq!(chapter_target(&c, 130.0, 1), None);
+        assert_eq!(chapter_target(&c, 90.0, -1), Some(0.0));
+        assert_eq!(chapter_target(&c, 60.0, -1), Some(0.0));
+        assert_eq!(chapter_target(&c, 10.0, -1), Some(0.0));
+        assert_eq!(chapter_target(&[], 10.0, 1), None);
     }
 }
