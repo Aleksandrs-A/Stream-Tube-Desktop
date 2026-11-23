@@ -441,7 +441,8 @@ impl SettingsPage {
                 .occlude()
                 .flex()
                 .flex_col()
-                .max_h(px(340.))
+                // short enough to fit above or below the button in any window
+                .max_h(px(340f32.min(f32::from(cx.global::<crate::ui::app::UiState>().viewport.height) * 0.5 - 48.).max(120.)))
                 .overflow_y_scroll()
                 .py_1()
                 .rounded_lg()
@@ -485,7 +486,15 @@ impl SettingsPage {
                 Animation::new(std::time::Duration::from_millis(140)).with_easing(ease_out_quint()),
                 |d, t| d.opacity(t).mt(px((1. - t) * -6.)),
             );
-            el = el.child(deferred(div().absolute().top(px(40.)).left_0().w_full().child(list)).with_priority(5));
+            // Anchored at the button: the list opens below it, or above it when
+            // the window has no room below. The 40px top padding is the button's
+            // height, so in either case the list sits just beside the button.
+            el = el.child(
+                div().absolute().top_0().left_0().w_full().child(
+                    deferred(anchored().child(div().w(px(width)).pt(px(40.)).child(nested_scroll(SharedString::from(format!("{id}-wrap")), list))))
+                        .with_priority(5),
+                ),
+            );
         }
         el.into_any_element()
     }
