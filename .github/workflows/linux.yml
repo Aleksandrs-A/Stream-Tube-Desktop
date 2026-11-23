@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     paths: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "packaging/linux/**", ".github/workflows/linux.yml"]
+  # every pull request is built and its packages checked (no path filter, so the
+  # required check always reports)
+  pull_request:
   release:
     types: [published]
   workflow_dispatch:
@@ -12,7 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  linux:
     # the oldest supported Ubuntu keeps the binary compatible with older glibc
     runs-on: ubuntu-22.04
     steps:

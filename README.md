@@ -239,6 +239,11 @@ src/
   happens, signing in inside the app or updating yt-dlp usually fixes it.
 - Windows is the main platform. The Linux build is new and less tested; macOS isn't built yet.
 
+## Contributing
+
+Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build,
+what makes a PR easy to merge, and what won't be accepted.
+
 ## Credits
 
 Stream Tube leans on a lot of other people's work:
