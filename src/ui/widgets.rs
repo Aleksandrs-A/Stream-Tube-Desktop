@@ -24,7 +24,75 @@ impl<T> Load<T> {
 
 /// Vertical scroll container used by every page.
 pub fn page_scroll(id: &'static str, handle: &ScrollHandle) -> Stateful<Div> {
-    div().id(id).size_full().overflow_y_scroll().track_scroll(handle)
+    div().id(id).size_full().overflow_y_scroll().track_scroll(handle).child(smooth_scroll(id, handle.clone()))
+}
+
+/// Mouse-wheel scrolling that glides instead of jumping a fixed step per notch.
+/// gpui moves the page by the whole step; this notices the jump, keeps it as the
+/// target and eases the visible position there over the next frames. Touchpad
+/// scrolling is already smooth and passes through untouched.
+fn smooth_scroll(id: &'static str, handle: ScrollHandle) -> impl IntoElement {
+    struct Glide {
+        /// where the page is drawn now / where it's heading (offset.y, ≤ 0)
+        shown: f32,
+        target: f32,
+        last: std::time::Instant,
+        /// the last wheel event came from a touchpad
+        precise: bool,
+    }
+    thread_local! {
+        static GLIDES: std::cell::RefCell<std::collections::HashMap<&'static str, Glide>> = Default::default();
+    }
+    /// how quickly it settles: ~63% of the way every TAU
+    const TAU: f32 = 0.045;
+    /// mouse-wheel notches move a bit further than gpui's line step
+    const WHEEL_BOOST: f32 = 1.4;
+    canvas(
+        move |_, window, _| {
+            let now = std::time::Instant::now();
+            let actual: f32 = handle.offset().y.into();
+            let max: f32 = handle.max_offset().y.into();
+            GLIDES.with(|g| {
+                let mut g = g.borrow_mut();
+                let st = g.entry(id).or_insert(Glide { shown: actual, target: actual, last: now, precise: false });
+                let moved = actual - st.shown;
+                if moved.abs() > 0.01 {
+                    // something moved the page since the last frame
+                    if st.precise || moved.abs() > 3000.0 {
+                        // touchpad, or a jump (new page, scroll to top): follow it exactly
+                        *st = Glide { shown: actual, target: actual, last: now, precise: st.precise };
+                        return;
+                    }
+                    st.target = (st.target + moved * WHEEL_BOOST).clamp(-max.max(0.0), 0.0);
+                }
+                let gap = st.target - st.shown;
+                if gap.abs() < 0.5 {
+                    st.shown = st.target;
+                } else {
+                    let dt = now.duration_since(st.last).as_secs_f32().min(0.05);
+                    st.shown += gap * (1.0 - (-dt / TAU).exp());
+                    window.request_animation_frame();
+                }
+                st.last = now;
+                if (st.shown - actual).abs() > 0.01 {
+                    handle.set_offset(point(handle.offset().x, px(st.shown)));
+                }
+            });
+        },
+        move |_, _, window, _| {
+            window.on_mouse_event(move |ev: &ScrollEvent, phase, _, _| {
+                if phase == DispatchPhase::Capture {
+                    GLIDES.with(|g| {
+                        if let Some(st) = g.borrow_mut().get_mut(id) {
+                            st.precise = ev.delta.precise();
+                        }
+                    });
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_0()
 }
 
 /// True when the scroll position is within `margin` of the bottom.
