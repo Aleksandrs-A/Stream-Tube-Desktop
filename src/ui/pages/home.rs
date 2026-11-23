@@ -112,19 +112,10 @@ impl HomePage {
                         std::thread::sleep(std::time::Duration::from_millis(400));
                         crate::api::auth::home().ok()
                     });
-                    if let Some(mut p) = home {
+                    if let Some(p) = home {
                         if !p.items.is_empty() {
-                            // a second page gives a refresh more to choose from
-                            if let Some(c) = p.continuation.take() {
-                                match crate::api::auth::browse_continue(&c) {
-                                    Ok(more) => {
-                                        let have: std::collections::HashSet<String> = p.items.iter().filter_map(|i| i.as_video().map(|v| v.id.clone())).collect();
-                                        p.items.extend(more.items.into_iter().filter(|i| i.as_video().map(|v| !have.contains(&v.id)).unwrap_or(true)));
-                                        p.continuation = more.continuation;
-                                    }
-                                    Err(_) => p.continuation = Some(c),
-                                }
-                            }
+                            // shown as soon as the first page is in; the next page loads
+                            // when scrolling, instead of making the start wait for it
                             return Ok((freshen(p.items), p.continuation.map(|c| format!("{ACCOUNT}{c}"))));
                         }
                     }
@@ -157,22 +148,9 @@ impl HomePage {
                         if feed.is_empty() || stale {
                             feed = crate::feed::refresh(None, |_, _| {}).0;
                         }
-                        // mix in some popular music & gaming for variety
-                        let mut items: Vec<Item> = feed.into_iter().take(80).map(Item::Video).collect();
-                        if let Ok(p) = innertube::explore(EXPLORE[0].1) {
-                            let extra: Vec<Item> = p.items.into_iter().filter(|i| matches!(i, Item::Video(_))).take(12).collect();
-                            let mut out = Vec::new();
-                            let mut ex = extra.into_iter();
-                            for (i, it) in items.drain(..).enumerate() {
-                                out.push(it);
-                                if i % 8 == 7 {
-                                    if let Some(e) = ex.next() {
-                                        out.push(e);
-                                    }
-                                }
-                            }
-                            items = out;
-                        }
+                        // only the subscriptions: popular videos from unrelated channels mixed
+                        // in here read as random videos in the feed
+                        let items: Vec<Item> = feed.into_iter().take(80).map(Item::Video).collect();
                         return Ok((freshen(items), None));
                     }
                     // no subscriptions: popular from several categories, interleaved

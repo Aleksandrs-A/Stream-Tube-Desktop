@@ -1046,15 +1046,26 @@ impl PlayerView {
             .when_some(chapter_title.filter(|_| !narrow && !store::settings_snapshot().hide_chapters), |d, c| {
                 d.child(
                     div()
+                        .id("c-chapter")
                         .flex()
                         .items_center()
                         .gap_1()
                         .ml_3()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hsla(0., 0., 1., 0.15)))
                         .text_sm()
                         .text_color(white())
                         .child("•")
                         .child(div().max_w(px(260.)).truncate().child(c))
-                        .child(icon("chevron-right").size_4().text_color(white())),
+                        .child(icon("chevron-right").size_4().text_color(white()))
+                        // opens the chapter list beside the player
+                        .on_click(|_, _, cx| {
+                            cx.stop_propagation();
+                            crate::ui::pages::watch::toggle_chapters(cx);
+                        }),
                 )
             });
 
@@ -1404,7 +1415,7 @@ impl PlayerView {
                         row(SharedString::from(format!("q-{q}")), None, format!("{q}p{}", if q >= 2160 { " 4K" } else if q >= 720 { " HD" } else { "" }), None, q == cur)
                             .on_click(cx.listener(move |t, _, _, cx| {
                                 t.menu = None;
-                                store::update_settings(|s| s.default_quality = q);
+                                // set_quality keeps it as the default only when "Remember last quality" is on
                                 t.player.update(cx, |p, cx| p.set_quality(q, cx));
                             })),
                     );
