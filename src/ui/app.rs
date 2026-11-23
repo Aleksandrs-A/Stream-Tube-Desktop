@@ -332,6 +332,11 @@ pub struct AppView {
     suggestion_serial: u64,
     sel_suggestion: Option<usize>,
     mini_view: Entity<PlayerView>,
+    /// Mini player placement: distance from the window's right and bottom edges, and width
+    mini_geom: (f32, f32, f32),
+    mini_drag: Option<MiniDrag>,
+    /// the last press on the mini player's title moved it (so its click doesn't open the video)
+    mini_dragged: bool,
     main_view: Entity<PlayerView>,
     preview_view: Entity<crate::player::preview::PreviewView>,
     /// bounded cache for every thumbnail and avatar in this window
@@ -517,6 +522,9 @@ impl AppView {
             suggestion_serial: 0,
             sel_suggestion: None,
             mini_view,
+            mini_geom: load_mini_geom(),
+            mini_drag: None,
+            mini_dragged: false,
             main_view,
             preview_view,
             images,
@@ -2011,19 +2019,29 @@ impl AppView {
             return None;
         }
         let id = video.id.clone();
+        let (right, bottom, w) = self.mini_geom;
+        let h = w * 9.0 / 16.0;
+        let start = |resize: bool| {
+            cx.listener(move |this: &mut Self, ev: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                let (right, bottom, w) = this.mini_geom;
+                this.mini_drag = Some(MiniDrag { resize, start: ev.position, right, bottom, w, moved: false });
+                cx.notify();
+            })
+        };
         Some(
             div()
                 .absolute()
-                .right_4()
-                .bottom_4()
-                .w(px(400.))
+                .right(px(right))
+                .bottom(px(bottom))
+                .w(px(w))
                 .rounded_xl()
                 .overflow_hidden()
                 .bg(p.surface2)
                 .shadow_2xl()
                 .border_1()
                 .border_color(p.border)
-                .child(div().w_full().h(px(225.)).child(self.mini_view.clone()))
+                .child(div().w_full().h(px(h)).child(self.mini_view.clone()))
                 .child(
                     div()
                         .id("mini-info")
@@ -2031,15 +2049,75 @@ impl AppView {
                         .flex_col()
                         .px_3()
                         .py_2()
-                        .cursor_pointer()
+                        // drag to move; a click without dragging opens the video
+                        .cursor_grab()
+                        .on_mouse_down(MouseButton::Left, start(false))
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            if std::mem::take(&mut this.mini_dragged) {
+                                return;
+                            }
                             this.go(Route::Watch { id: id.clone(), playlist: None, start: None }, window, cx)
                         }))
                         .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).truncate().child(video.title.clone()))
                         .child(div().text_xs().text_color(p.text2).truncate().child(video.channel_name.clone())),
                 )
+                // resize from the top and left edges (the player is anchored bottom-right);
+                // thin strips, so the player's own buttons stay clickable
+                .child(div().id("mini-resize-top").absolute().top_0().left_0().right_0().h(px(6.)).cursor(CursorStyle::ResizeUpDown).on_mouse_down(MouseButton::Left, start(true)))
+                .child(div().id("mini-resize-left").absolute().top_0().left_0().bottom_0().w(px(6.)).cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, start(true)))
+                .child(div().id("mini-resize-corner").absolute().top_0().left_0().size(px(12.)).cursor(CursorStyle::ResizeUpLeftDownRight).on_mouse_down(MouseButton::Left, start(true)))
                 .into_any_element(),
         )
+    }
+
+    /// While the mini player is dragged: a layer over the whole window that follows
+    /// the pointer (so nothing underneath reacts) and ends the drag on release.
+    fn render_mini_drag(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.mini_drag.as_ref()?;
+        Some(
+            div()
+                .id("mini-drag")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .cursor(if self.mini_drag.as_ref().is_some_and(|d| d.resize) { CursorStyle::ResizeUpLeftDownRight } else { CursorStyle::ClosedHand })
+                .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
+                    let Some(d) = this.mini_drag.as_mut() else { return };
+                    if ev.pressed_button != Some(MouseButton::Left) {
+                        this.end_mini_drag(cx);
+                        return;
+                    }
+                    let dx: f32 = (ev.position.x - d.start.x).into();
+                    let dy: f32 = (ev.position.y - d.start.y).into();
+                    if dx.abs() + dy.abs() > 4.0 {
+                        d.moved = true;
+                    }
+                    let vp = window.viewport_size();
+                    let (vw, vh): (f32, f32) = (vp.width.into(), vp.height.into());
+                    let (right, bottom, w) = if d.resize {
+                        // the edge moved furthest decides (the top edge in width units)
+                        let delta = if dx.abs() >= (dy * 16.0 / 9.0).abs() { dx } else { dy * 16.0 / 9.0 };
+                        let w = (d.w - delta).clamp(MINI_MIN_W, (vw - d.right - 8.0).max(MINI_MIN_W).min(MINI_MAX_W));
+                        (d.right, d.bottom, w)
+                    } else {
+                        (d.right - dx, d.bottom - dy, d.w)
+                    };
+                    this.mini_geom = clamp_mini((right, bottom, w), vw, vh);
+                    cx.notify();
+                }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_mini_drag(cx)))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_mini_drag(cx)))
+                .into_any_element(),
+        )
+    }
+
+    fn end_mini_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(d) = self.mini_drag.take() {
+            self.mini_dragged = d.moved;
+            let (r, b, w) = self.mini_geom;
+            store::kv_set("mini_geom", &format!("{r:.0},{b:.0},{w:.0}"));
+        }
+        cx.notify();
     }
 
     fn render_menu(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -2607,7 +2685,12 @@ impl Render for AppView {
                     .children(sidebar)
                     .child(page_area.flex_1().min_w_0().h_full()),
             );
-            root = root.children(self.render_mini_player(cx));
+            {
+                // a smaller window keeps the mini player on screen
+                let vp = window.viewport_size();
+                self.mini_geom = clamp_mini(self.mini_geom, vp.width.into(), vp.height.into());
+            }
+            root = root.children(self.render_mini_player(cx)).children(self.render_mini_drag(cx));
             root = root.children(self.render_drawer(cx));
         }
         root = root.children(self.render_dl_panel(cx));
@@ -2801,4 +2884,36 @@ fn window_minimized(window: &Window) -> bool {
         let _ = window;
         true
     }
+}
+
+struct MiniDrag {
+    resize: bool,
+    start: Point<Pixels>,
+    right: f32,
+    bottom: f32,
+    w: f32,
+    moved: bool,
+}
+
+const MINI_MIN_W: f32 = 260.0;
+const MINI_MAX_W: f32 = 960.0;
+
+/// Keeps the mini player (right, bottom, width) inside a vw x vh window.
+fn clamp_mini((right, bottom, w): (f32, f32, f32), vw: f32, vh: f32) -> (f32, f32, f32) {
+    let w = w.clamp(MINI_MIN_W, MINI_MAX_W).min((vw - 16.0).max(MINI_MIN_W));
+    // video plus the title strip
+    let h = w * 9.0 / 16.0 + 52.0;
+    let right = right.clamp(8.0, (vw - w - 8.0).max(8.0));
+    let bottom = bottom.clamp(8.0, (vh - h - 8.0).max(8.0));
+    (right, bottom, w)
+}
+
+fn load_mini_geom() -> (f32, f32, f32) {
+    store::kv_get("mini_geom")
+        .and_then(|s| {
+            let v: Vec<f32> = s.split(',').filter_map(|x| x.parse().ok()).collect();
+            (v.len() == 3).then(|| (v[0], v[1], v[2]))
+        })
+        .map(|(r, b, w)| (r.max(8.0), b.max(8.0), w.clamp(MINI_MIN_W, MINI_MAX_W)))
+        .unwrap_or((16.0, 16.0, 400.0))
 }

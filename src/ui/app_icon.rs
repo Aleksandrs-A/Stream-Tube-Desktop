@@ -146,8 +146,11 @@ pub fn set_window_icon(window: &Window, accent: u32) {
 #[cfg(windows)]
 fn update_shortcuts(accent: u32) {
     let Ok(exe) = std::env::current_exe() else { return };
+    // an update reinstalls the shortcuts with the default icon, so the version and
+    // the exe's timestamp are part of what "already done" means
+    let built = std::fs::metadata(&exe).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     let exe = exe.display().to_string();
-    let key = format!("{exe}|{accent:06x}");
+    let key = format!("{exe}|{accent:06x}|{}|{built}", env!("CARGO_PKG_VERSION"));
     if crate::store::kv_get("shortcut_icon").as_deref() == Some(key.as_str()) {
         return;
     }
