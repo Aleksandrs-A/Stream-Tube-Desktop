@@ -294,21 +294,30 @@ pub fn now() -> i64 {
 
 pub fn relative_from_ts(ts: i64) -> String {
     let d = (now() - ts).max(0);
-    let (n, u) = if d < 60 {
-        return "just now".into();
+    let (n, u, ru) = if d < 60 {
+        return crate::i18n::t("just now").into();
     } else if d < 3600 {
-        (d / 60, "minute")
+        (d / 60, "minute", ["минуту", "минуты", "минут"])
     } else if d < 86400 {
-        (d / 3600, "hour")
+        (d / 3600, "hour", ["час", "часа", "часов"])
     } else if d < 7 * 86400 {
-        (d / 86400, "day")
+        (d / 86400, "day", ["день", "дня", "дней"])
     } else if d < 30 * 86400 {
-        (d / (7 * 86400), "week")
+        (d / (7 * 86400), "week", ["неделю", "недели", "недель"])
     } else if d < 365 * 86400 {
-        (d / (30 * 86400), "month")
+        (d / (30 * 86400), "month", ["месяц", "месяца", "месяцев"])
     } else {
-        (d / (365 * 86400), "year")
+        (d / (365 * 86400), "year", ["год", "года", "лет"])
     };
+    if crate::i18n::is_russian() {
+        let form = match (n % 100, n % 10) {
+            (11..=14, _) => ru[2],
+            (_, 1) => ru[0],
+            (_, 2..=4) => ru[1],
+            _ => ru[2],
+        };
+        return format!("{n} {form} назад");
+    }
     format!("{n} {u}{} ago", if n == 1 { "" } else { "s" })
 }
 

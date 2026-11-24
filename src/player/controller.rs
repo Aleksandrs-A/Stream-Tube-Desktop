@@ -1,5 +1,6 @@
 //! Player controller: owns the mpv instance, stream selection, SponsorBlock, queue and progress.
 use super::mpv::{Mpv, MpvEvent, PropValue};
+use crate::i18n::{t as translate, tf};
 use crate::api::services::{self, Segment};
 use crate::api::streams;
 use crate::api::types::*;
@@ -242,7 +243,7 @@ impl Player {
                 Some(m)
             }
             Err(e) => {
-                self.init_error = Some(format!("Could not start the video engine (libmpv): {e}"));
+                self.init_error = Some(tf!("Could not start the video engine (libmpv): {e}", "Не удалось запустить движок воспроизведения libmpv ({e})"));
                 None
             }
         }
@@ -303,7 +304,7 @@ impl Player {
                             self.fallback_to_ytdlp(cx);
                         } else {
                             self.loading = false;
-                            self.error = Some(format!("Playback error: {e}"));
+                            self.error = Some(tf!("Playback error: {e}", "Ошибка воспроизведения ({e})"));
                         }
                     }
                 }
@@ -422,7 +423,7 @@ impl Player {
                     if s.sb_notify {
                         let weak = cx.entity().downgrade();
                         let mut actions: Vec<(SharedString, Arc<dyn Fn(&mut Window, &mut App)>)> = vec![(
-                            "Unskip".into(),
+                            translate("Unskip").into(),
                             Arc::new(move |_, cx: &mut App| {
                                 if let Some(p) = weak.upgrade() {
                                     p.update(cx, |p, _| p.seek_to(back_to));
@@ -433,14 +434,14 @@ impl Player {
                             for (label, up) in [("Upvote", true), ("Downvote", false)] {
                                 let (server, uuid, user) = (s.sponsorblock_server.clone(), seg.uuid.clone(), s.sb_user_id.clone());
                                 actions.push((
-                                    label.into(),
+                                    translate(label).into(),
                                     Arc::new(move |_, cx: &mut App| {
                                         let (server, uuid, user) = (server.clone(), uuid.clone(), user.clone());
                                         cx.spawn(async move |cx| {
                                             let res = crate::ui::blocking(move || services::sponsor_vote(&server, &uuid, &user, up)).await;
                                             let _ = cx.update(|cx| match res {
-                                                Ok(()) => toast(cx, "Thanks for voting"),
-                                                Err(e) => toast(cx, format!("Vote failed: {e}")),
+                                                Ok(()) => toast(cx, translate("Thanks for voting")),
+                                                Err(e) => toast(cx, tf!("Vote failed: {e}", "Не удалось отправить голос ({e})")),
                                             });
                                         })
                                         .detach();
@@ -448,7 +449,7 @@ impl Player {
                                 ));
                             }
                         }
-                        crate::ui::toast_with_actions(cx, format!("Skipped {}", services::sponsor_category_name(&seg.category)), actions);
+                        crate::ui::toast_with_actions(cx, tf!("Skipped {}", "Пропущен фрагмент «{}»", translate(services::sponsor_category_name(&seg.category))), actions);
                     }
                 }
                 "ask" => prompt = Some(seg.clone()),
@@ -645,7 +646,7 @@ impl Player {
                     }
                     Err(e) => {
                         p.loading = false;
-                        p.error = Some(format!("Could not play this video: {e}"));
+                        p.error = Some(tf!("Could not play this video: {e}", "Не удалось воспроизвести видео ({e})"));
                     }
                 }
                 cx.notify();
@@ -673,7 +674,7 @@ impl Player {
             }
         };
         let Some(src) = src else {
-            self.error = Some("No playable stream found".into());
+            self.error = Some(translate("No playable stream found").into());
             self.loading = false;
             return;
         };
@@ -869,7 +870,7 @@ impl Player {
         let mut out: Vec<(&'static str, String)> = Vec::new();
         if let Some(v) = &self.video {
             let source = self.streams.as_ref().map(|s| s.source).unwrap_or("");
-            out.push(("Video ID", if source.is_empty() { v.id.clone() } else { format!("{}  ·  via {source}", v.id) }));
+            out.push(("Video ID", if source.is_empty() { v.id.clone() } else { tf!("{}, via {source}", "{}, источник {source}", v.id) }));
         }
         if !self.audio_only {
             let (w, h) = (f("video-params/w").unwrap_or(0.0), f("video-params/h").unwrap_or(0.0));
@@ -879,12 +880,12 @@ impl Player {
             }
             let dropped = f("frame-drop-count").unwrap_or(0.0) + f("decoder-frame-drop-count").unwrap_or(0.0);
             let shown = f("estimated-frame-number").unwrap_or(0.0);
-            out.push(("Frames", format!("{dropped:.0} dropped of {shown:.0}")));
+            out.push(("Frames", tf!("{dropped:.0} dropped of {shown:.0}", "Пропущено {dropped:.0} из {shown:.0}")));
             if let Some(c) = st("video-codec") {
                 let pf = st("video-params/hw-pixelformat").or_else(|| st("video-params/pixelformat")).unwrap_or_default();
-                out.push(("Video codec", if pf.is_empty() { c } else { format!("{c}  ·  {pf}") }));
+                out.push(("Video codec", if pf.is_empty() { c } else { format!("{c}, {pf}") }));
             }
-            let hw = st("hwdec-current").filter(|s| s != "no").unwrap_or_else(|| "off (software)".into());
+            let hw = st("hwdec-current").filter(|s| s != "no").unwrap_or_else(|| translate("off (software)").into());
             out.push(("Hardware decoding", hw));
             let color = [st("video-params/colormatrix"), st("video-params/primaries"), st("video-params/gamma")].into_iter().flatten().collect::<Vec<_>>();
             if !color.is_empty() {
@@ -892,30 +893,30 @@ impl Player {
             }
         }
         if let Some(c) = st("audio-codec-name").or_else(|| st("audio-codec")) {
-            let rate = f("audio-params/samplerate").map(|r| format!("  ·  {:.1} kHz", r / 1000.0)).unwrap_or_default();
-            let ch = f("audio-params/channel-count").map(|c| format!("  ·  {c:.0} ch")).unwrap_or_default();
+            let rate = f("audio-params/samplerate").map(|r| tf!(", {:.1} kHz", ", {:.1} кГц", r / 1000.0)).unwrap_or_default();
+            let ch = f("audio-params/channel-count").map(|c| tf!(", {c:.0} ch", ", каналов {c:.0}")).unwrap_or_default();
             out.push(("Audio codec", format!("{c}{rate}{ch}")));
         }
-        let kbps = |k: &str| f(k).filter(|b| *b > 0.0).map(|b| format!("{:.0} kbps", b / 1000.0));
-        let rates = [kbps("video-bitrate").map(|v| format!("video {v}")), kbps("audio-bitrate").map(|a| format!("audio {a}"))].into_iter().flatten().collect::<Vec<_>>();
+        let kbps = |k: &str| f(k).filter(|b| *b > 0.0).map(|b| tf!("{:.0} kbps", "{:.0} кбит/с", b / 1000.0));
+        let rates = [kbps("video-bitrate").map(|v| tf!("video {v}", "видео {v}")), kbps("audio-bitrate").map(|a| tf!("audio {a}", "звук {a}"))].into_iter().flatten().collect::<Vec<_>>();
         if !rates.is_empty() {
-            out.push(("Bitrate", rates.join("  ·  ")));
+            out.push(("Bitrate", rates.join(", ")));
         }
         if let Some(b) = f("demuxer-cache-duration") {
-            out.push(("Buffer health", format!("{b:.2} s")));
+            out.push(("Buffer health", tf!("{b:.2} s", "{b:.2} с")));
         }
         if let Some(sp) = f("cache-speed") {
-            out.push(("Connection speed", format!("{:.0} Kbps", sp * 8.0 / 1000.0)));
+            out.push(("Connection speed", tf!("{:.0} Kbps", "{:.0} кбит/с", sp * 8.0 / 1000.0)));
         }
         if let Some(mb) = m.get_f64("demuxer-cache-state/fw-bytes") {
-            out.push(("Buffered data", format!("{:.1} MB", mb / 1048576.0)));
+            out.push(("Buffered data", tf!("{:.1} MB", "{:.1} МБ", mb / 1048576.0)));
         }
-        out.push(("Volume", format!("{:.0}%{}", self.volume, if self.muted { " (muted)" } else { "" })));
+        out.push(("Volume", format!("{:.0}%{}", self.volume, if self.muted { translate(" (muted)") } else { "" })));
         out.push(("Speed", format!("{:.2}x", self.speed)));
         if let Some(a) = f("avsync") {
-            out.push(("A/V sync", format!("{:+.1} ms", a * 1000.0)));
+            out.push(("A/V sync", tf!("{:+.1} ms", "{:+.1} мс", a * 1000.0)));
         }
-        out.push(("Position", format!("{:.1} / {:.1} s", self.time, self.duration)));
+        out.push(("Position", tf!("{:.1} / {:.1} s", "{:.1} / {:.1} с", self.time, self.duration)));
         out
     }
 
@@ -1030,7 +1031,7 @@ impl Player {
             );
             let path = dir.join(name);
             let _ = m.command(&["screenshot-to-file", &path.to_string_lossy(), "video"]);
-            toast(cx, format!("Screenshot saved to {}", path.display()));
+            toast(cx, tf!("Screenshot saved to {}", "Снимок сохранён в {}", path.display()));
         }
     }
 

@@ -1,4 +1,5 @@
 use crate::api::innertube::{self, EXPLORE};
+use crate::i18n::{t, tf};
 use crate::api::types::*;
 use crate::store;
 use crate::ui::cards::*;
@@ -113,7 +114,10 @@ fn recently_uploaded() -> anyhow::Result<Vec<Item>> {
         })
         .collect();
     if recent.is_empty() {
-        anyhow::bail!("No videos from the last {RECENT_DAYS} days in your feed yet. Sign in or subscribe to some channels to fill this up.");
+        anyhow::bail!("{}", tf!(
+            "No videos from the last {RECENT_DAYS} days in your feed yet. Sign in or subscribe to some channels to fill this up.",
+            "В ленте пока нет видео за последние {RECENT_DAYS} дней. Войдите в аккаунт или подпишитесь на каналы."
+        ));
     }
     recent.sort_by(|a, b| b.0.cmp(&a.0));
     Ok(recent
@@ -460,11 +464,11 @@ impl Render for HomePage {
             chip(
                 "chip-all",
                 if crate::api::auth::signed_in() || crate::api::web::connected() || !store::subscriptions().is_empty() {
-                    "All"
+                    t("All")
                 } else if crate::recommend::available() {
-                    "For you"
+                    t("For you")
                 } else {
-                    "Popular"
+                    t("Popular")
                 },
                 self.chip == 0,
                 cx,
@@ -474,13 +478,13 @@ impl Render for HomePage {
                     this.load(cx);
                 })),
         );
-        chips = chips.child(chip("chip-recent", "Recently uploaded", self.chip == RECENT, cx).on_click(cx.listener(|this, _, _, cx| {
+        chips = chips.child(chip("chip-recent", t("Recently uploaded"), self.chip == RECENT, cx).on_click(cx.listener(|this, _, _, cx| {
             this.chip = RECENT;
             this.load(cx);
         })));
         if !s.hide_explore {
             for (i, (name, _)) in EXPLORE.iter().enumerate() {
-                chips = chips.child(chip(SharedString::from(format!("chip-{i}")), *name, self.chip == i + 1, cx).on_click(cx.listener(
+                chips = chips.child(chip(SharedString::from(format!("chip-{i}")), t(name), self.chip == i + 1, cx).on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.chip = i + 1;
                         this.load(cx);

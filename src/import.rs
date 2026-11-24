@@ -17,6 +17,13 @@ pub struct ImportReport {
 
 impl std::fmt::Display for ImportReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if crate::i18n::is_russian() {
+            return write!(
+                f,
+                "Импортировано подписок {}, записей истории {}, плейлистов {} (видео {})",
+                self.subscriptions, self.history, self.playlists, self.playlist_videos
+            );
+        }
         write!(
             f,
             "Imported {} subscriptions, {} history entries, {} playlists ({} videos)",

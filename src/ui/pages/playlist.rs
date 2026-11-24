@@ -1,4 +1,5 @@
 use crate::api::innertube;
+use crate::i18n::{t, tf};
 use crate::api::types::*;
 use crate::player::controller::player;
 use crate::store;
@@ -79,7 +80,7 @@ impl PlaylistPage {
     }
 
     fn make_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let f = cx.new(|cx| gpui_kit::component::input::InputState::new(window, cx).placeholder("Search in playlist"));
+        let f = cx.new(|cx| gpui_kit::component::input::InputState::new(window, cx).placeholder(t("Search in playlist")));
         cx.observe(&f, |_, _, cx| cx.notify()).detach();
         self.filter = Some(f);
     }
@@ -131,7 +132,7 @@ impl PlaylistPage {
             self.title = pl.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| "Playlist".into());
             self.protected = pl.as_ref().map(|p| p.protected).unwrap_or(false);
             let items = store::playlist_items(id);
-            self.count_text = Some(format!("{} videos", items.len()));
+            self.count_text = Some(tf!("{} videos", "Видео {}", items.len()));
             self.owner = Some(("You".into(), None));
             self.videos = Load::Ready(items);
         }
@@ -195,7 +196,10 @@ impl PlaylistPage {
 }
 
 impl Render for PlaylistPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(filter) = &self.filter {
+            localize_placeholder(filter, "Search in playlist", window, cx);
+        }
         let p = pal(cx);
         let has_more = self.continuation.is_some();
         maybe_load_more(&self.scroll, &mut self.loading_more, has_more, cx, |this, cx| this.load_more(cx));
@@ -223,7 +227,13 @@ impl Render for PlaylistPage {
                     .bg(p.surface)
                     .when_some(thumb, |d, t| d.child(img(SharedString::from(t)).size_full().object_fit(ObjectFit::Cover))),
             )
-            .child(div().text_2xl().font_weight(FontWeight::BOLD).text_color(p.text).child(self.title.clone()))
+            .child(div().text_2xl().font_weight(FontWeight::BOLD).text_color(p.text).child(
+                if self.protected || (local_id.is_none() && self.info.is_none()) {
+                    t(&self.title).to_string()
+                } else {
+                    self.title.clone()
+                }
+            ))
             .when_some(owner, |d, (name, cid)| {
                 d.child(
                     div()
@@ -232,7 +242,7 @@ impl Render for PlaylistPage {
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(p.text)
                         .cursor_pointer()
-                        .child(name)
+                        .child(if local_id.is_some() { t("You").to_string() } else { name })
                         .on_click(move |_, window, cx| {
                             if let Some(c) = cid.clone() {
                                 navigate(Route::Channel(c), window, cx)
@@ -242,9 +252,9 @@ impl Render for PlaylistPage {
             })
             .child({
                 let total: u64 = videos.iter().filter_map(|v| v.duration_secs).sum();
-                let count = self.count_text.clone().unwrap_or_else(|| format!("{} videos", videos.len()));
-                let dur = if total >= 3600 { format!("{} h {} min", total / 3600, (total % 3600) / 60) } else if total > 0 { format!("{} min", total / 60) } else { String::new() };
-                div().flex().gap_2().text_xs().text_color(p.text2).child(count).when(!dur.is_empty(), |d| d.child("•").child(dur))
+                let count = self.count_text.clone().unwrap_or_else(|| tf!("{} videos", "Видео {}", videos.len()));
+                let dur = if total >= 3600 { tf!("{} h {} min", "{} ч {} мин", total / 3600, (total % 3600) / 60) } else if total > 0 { tf!("{} min", "{} мин", total / 60) } else { String::new() };
+                div().text_xs().text_color(p.text2).child(if dur.is_empty() { count } else { format!("{count}, {dur}") })
             })
             .child(
                 div()
@@ -323,14 +333,14 @@ impl Render for PlaylistPage {
                     );
                 }
                 for (k, label) in [(0u8, "Default"), (1, "Title"), (2, "Longest"), (3, "Shortest"), (4, "Channel")] {
-                    bar = bar.child(chip(SharedString::from(format!("pl-sort-{k}")), label, sort == k, cx).on_click(cx.listener(move |this, _, _, cx| {
+                    bar = bar.child(chip(SharedString::from(format!("pl-sort-{k}")), t(label), sort == k, cx).on_click(cx.listener(move |this, _, _, cx| {
                         this.sort = k;
                         cx.notify();
                     })));
                 }
                 let mut col = div().flex().flex_col().gap_1().flex_1().min_w_0().child(bar);
                 if shown.is_empty() {
-                    col = col.child(div().py_8().text_sm().text_color(p.text2).child("No videos match"));
+                    col = col.child(div().py_8().text_sm().text_color(p.text2).child(t("No videos match")));
                 }
                 let vs = &shown;
                 for (i, v) in vs.iter().map(|(i, v)| (*i, v)) {
