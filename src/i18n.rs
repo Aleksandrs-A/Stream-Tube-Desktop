@@ -11,24 +11,75 @@ pub enum AppLanguage {
     English,
     #[serde(rename = "ru")]
     Russian,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "az")]
+    Azerbaijani,
+    #[serde(rename = "uk")]
+    Ukrainian,
+    #[serde(rename = "kk")]
+    Kazakh,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "zh-CN")]
+    ChineseSimplified,
+    #[serde(rename = "zh-TW")]
+    ChineseTraditional,
 }
 
 impl AppLanguage {
-    pub const OPTIONS: &[(Self, &str)] = &[(Self::English, "English"), (Self::Russian, "Русский")];
+    pub const OPTIONS: &[(Self, &str)] = &[
+        (Self::English, "English"),
+        (Self::Azerbaijani, "Azərbaycanca"),
+        (Self::German, "Deutsch"),
+        (Self::French, "Français"),
+        (Self::Russian, "Русский"),
+        (Self::Ukrainian, "Українська"),
+        (Self::Kazakh, "Қазақша"),
+        (Self::Japanese, "日本語"),
+        (Self::ChineseSimplified, "简体中文"),
+        (Self::ChineseTraditional, "繁體中文"),
+    ];
 
     fn code(self) -> &'static str {
         match self {
             Self::English => "en",
             Self::Russian => "ru",
+            Self::French => "fr",
+            Self::Azerbaijani => "az",
+            Self::Ukrainian => "uk",
+            Self::Kazakh => "kk",
+            Self::German => "de",
+            Self::Japanese => "ja",
+            Self::ChineseSimplified => "zh-CN",
+            Self::ChineseTraditional => "zh-TW",
         }
     }
 
     fn catalog(self) -> Option<&'static Catalog> {
         static RU: Catalog = Catalog::new(include_str!("i18n/locales/ru.json"));
+        static FR: Catalog = Catalog::new(include_str!("i18n/locales/fr.json"));
+        static AZ: Catalog = Catalog::new(include_str!("i18n/locales/az.json"));
+        static UK: Catalog = Catalog::new(include_str!("i18n/locales/uk.json"));
+        static KK: Catalog = Catalog::new(include_str!("i18n/locales/kk.json"));
+        static DE: Catalog = Catalog::new(include_str!("i18n/locales/de.json"));
+        static JA: Catalog = Catalog::new(include_str!("i18n/locales/ja.json"));
+        static ZH_CN: Catalog = Catalog::new(include_str!("i18n/locales/zh-CN.json"));
+        static ZH_TW: Catalog = Catalog::new(include_str!("i18n/locales/zh-TW.json"));
 
         Some(match self {
             Self::English => return None,
             Self::Russian => &RU,
+            Self::French => &FR,
+            Self::Azerbaijani => &AZ,
+            Self::Ukrainian => &UK,
+            Self::Kazakh => &KK,
+            Self::German => &DE,
+            Self::Japanese => &JA,
+            Self::ChineseSimplified => &ZH_CN,
+            Self::ChineseTraditional => &ZH_TW,
         })
     }
 

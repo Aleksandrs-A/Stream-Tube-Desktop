@@ -420,6 +420,23 @@ impl SettingsPage {
         self.select(id, label, 200., items, set, cx)
     }
 
+    fn app_language(&self, current: AppLanguage, cx: &mut Context<Self>) -> AnyElement {
+        let mut label = String::new();
+        let items = AppLanguage::OPTIONS.iter().map(|&(language, name)| {
+            let selected = language == current;
+            if selected {
+                label = name.to_string();
+            }
+            let credit = match language {
+                AppLanguage::Azerbaijani => "Pomi (MrPomidor4ek)",
+                AppLanguage::Russian => "Kushida",
+                _ => "",
+            };
+            (name.to_string(), credit.to_string(), selected, language)
+        }).collect();
+        self.select("app-language", label, 280., items, |s, v| s.app_language = v, cx)
+    }
+
     /// A dropdown button: `items` are (label, detail, active, value).
     fn select<T: Clone + 'static>(&self, id: &'static str, label: String, width: f32, items: Vec<(String, String, bool, T)>, set: fn(&mut Settings, T), cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
@@ -598,7 +615,7 @@ impl SettingsPage {
             .child(row(
                 "App language",
                 "",
-                self.choice("app-language", AppLanguage::OPTIONS, s.app_language, |s, v| s.app_language = v, cx),
+                self.app_language(s.app_language, cx),
                 cx,
             ))
             .child(row("Theme", "", self.choice("theme", &[("dark".to_string(), "Dark"), ("light".to_string(), "Light"), ("system".to_string(), "System")], s.theme.clone(), |s, v| s.theme = v, cx), cx))
