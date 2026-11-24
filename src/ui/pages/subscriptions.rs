@@ -108,7 +108,7 @@ impl FeedPage {
                 this.videos = res.0;
                 this.last_updated = Some(crate::api::json::now());
                 if res.1 > 0 {
-                    toast(cx, tf!("{} channels could not be refreshed", "Не удалось обновить каналы ({})", res.1));
+                    toast(cx, tf!("{0} channels could not be refreshed", res.1));
                 }
                 cx.notify();
             });
@@ -182,8 +182,8 @@ impl Render for FeedPage {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .when_some(self.last_updated.filter(|_| !self.refreshing), |d, t| d.child(div().text_xs().text_color(p.text2).child(tf!("Updated {}", "Обновлено {}", crate::api::json::relative_from_ts(t)))))
-                    .when(self.refreshing, |d| d.child(div().text_xs().text_color(p.text2).child(if total == 0 { t("Refreshing…").to_string() } else { tf!("Refreshing {done}/{total}…", "Обновление {done} из {total}…") })))
+                    .when_some(self.last_updated.filter(|_| !self.refreshing), |d, t| d.child(div().text_xs().text_color(p.text2).child(tf!("Updated {0}", crate::api::json::relative_from_ts(t)))))
+                    .when(self.refreshing, |d| d.child(div().text_xs().text_color(p.text2).child(if total == 0 { t("Refreshing…").to_string() } else { tf!("Refreshing {0}/{1}…", done, total) })))
                     .child(
                         pill("hide-watched", Some(if s.hide_watched_in_feed { "eye-off" } else { "eye" }), if s.hide_watched_in_feed { "Watched hidden" } else { "Hide watched" }, cx).on_click(|_, _, cx| {
                             store::update_settings(|s| s.hide_watched_in_feed ^= true);
@@ -360,7 +360,7 @@ impl Render for ChannelsPage {
                             for pr in store::profiles() {
                                 let member = pr.channels.contains(&cid2);
                                 let c = cid2.clone();
-                                items.push(MenuItem::new(if member { "square-check" } else { "square" }, tf!("Profile: {}", "Профиль «{}»", pr.name), move |_, cx| {
+                                items.push(MenuItem::new(if member { "square-check" } else { "square" }, tf!("Profile: {0}", pr.name), move |_, cx| {
                                     store::set_profile_channel(pr.id, &c, !member);
                                     cx.refresh_windows();
                                 }));
@@ -370,7 +370,7 @@ impl Render for ChannelsPage {
                             items.push(MenuItem::new("user-minus", t("Unsubscribe"), move |_, cx| {
                                 store::unsubscribe(&c);
                                 crate::ui::cards::sync_subscription(c.clone(), false, cx);
-                                toast(cx, tf!("Unsubscribed from {n}", "Подписка на канал «{n}» отменена"));
+                                toast(cx, tf!("Unsubscribed from {0}", n));
                                 cx.refresh_windows();
                             }));
                             open_menu(ev.position(), items, window, cx);
@@ -390,7 +390,7 @@ impl Render for ChannelsPage {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(section_title(tf!("Subscriptions ({})", "Подписки ({})", store::subscriptions().len()), cx))
+                            .child(section_title(tf!("Subscriptions ({0})", store::subscriptions().len()), cx))
                             .child(div().w(px(260.)).px_3().py_1().rounded_full().border_1().border_color(p.border).child(Input::new(&self.filter).appearance(false).cleanable(true))),
                     )
                     .child(pbar)

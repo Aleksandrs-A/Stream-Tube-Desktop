@@ -450,7 +450,7 @@ pub fn rich_text_with(id: impl Into<ElementId>, text: String, emojis: &[(String,
             let mut items = vec![crate::ui::app::MenuItem::new("copy", t("Copy all text"), move |_, cx| crate::ui::copy_to_clipboard(text.clone(), cx))];
             for u in urls.iter().take(3) {
                 let u2 = u.clone();
-                let label = if u.chars().count() > 40 { tf!("Copy link {}…", "Копировать ссылку {}…", u.chars().take(40).collect::<String>()) } else { tf!("Copy link {u}", "Копировать ссылку {u}") };
+                let label = if u.chars().count() > 40 { tf!("Copy link {0}…", u.chars().take(40).collect::<String>()) } else { tf!("Copy link {0}", u) };
                 items.push(crate::ui::app::MenuItem::new("link", label, move |_, cx| crate::ui::copy_to_clipboard(u2.clone(), cx)));
             }
             crate::ui::app::open_menu(ev.position, items, window, cx);

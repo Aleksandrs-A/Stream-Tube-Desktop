@@ -114,10 +114,7 @@ fn recently_uploaded() -> anyhow::Result<Vec<Item>> {
         })
         .collect();
     if recent.is_empty() {
-        anyhow::bail!("{}", tf!(
-            "No videos from the last {RECENT_DAYS} days in your feed yet. Sign in or subscribe to some channels to fill this up.",
-            "В ленте пока нет видео за последние {RECENT_DAYS} дней. Войдите в аккаунт или подпишитесь на каналы."
-        ));
+        anyhow::bail!("{}", tf!("No videos from the last {0} days in your feed yet. Sign in or subscribe to some channels to fill this up.", RECENT_DAYS));
     }
     recent.sort_by(|a, b| b.0.cmp(&a.0));
     Ok(recent

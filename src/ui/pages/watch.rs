@@ -261,7 +261,7 @@ impl WatchPage {
                     chat.sending = false;
                 }
                 if let Err(e) = res {
-                    toast(cx, tf!("Message not sent: {e}", "Не удалось отправить сообщение ({e})"));
+                    toast(cx, tf!("Message not sent: {0}", e));
                 }
                 cx.notify();
             });
@@ -483,7 +483,7 @@ impl WatchPage {
             return;
         }
         if let Some(v) = next {
-            toast(cx, tf!("Up next: {}", "Далее «{}»", v.title));
+            toast(cx, tf!("Up next: {0}", v.title));
             let id = v.id.clone();
             cx.spawn(async move |_, cx| {
                 cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
@@ -1053,7 +1053,7 @@ impl WatchPage {
         };
         let data = match state {
             Load::Loading => return spinner(cx).into_any_element(),
-            Load::Error(e) => return div().py_4().text_sm().text_color(p.text2).child(tf!("Could not load comments: {e}", "Не удалось загрузить комментарии ({e})")).into_any_element(),
+            Load::Error(e) => return div().py_4().text_sm().text_color(p.text2).child(tf!("Could not load comments: {0}", e)).into_any_element(),
             Load::Ready(c) => c.clone(),
         };
         let sort_new = self.comment_sort_new;
@@ -1066,7 +1066,7 @@ impl WatchPage {
                 .gap_6()
                 .child(div().text_xl().font_weight(FontWeight::BOLD).text_color(p.text).child({
                     let n = data.count_text.clone().or(w.comment_count_text.clone()).unwrap_or_default();
-                    if n.to_lowercase().contains("comment") { n } else { tf!("{n} Comments", "Комментарии ({n})").trim().to_string() }
+                    if n.to_lowercase().contains("comment") { n } else { tf!("{0} Comments", n).trim().to_string() }
                 }))
                 .child(
                     div()
@@ -1103,14 +1103,14 @@ impl WatchPage {
             let later = total - reached.len();
             col = col.child(div().text_sm().text_color(p.text2).child(if total == 0 {
                 if data.continuation.is_some() && data.comments.len() < 400 {
-                    tf!("Looking for comments with timestamps… ({} checked)", "Ищем комментарии с отметками времени… (проверено {})", data.comments.len())
+                    tf!("Looking for comments with timestamps… ({0} checked)", data.comments.len())
                 } else {
-                    tf!("None of the {} comments checked mention a timestamp.", "Среди проверенных комментариев ({}) нет отметок времени.", data.comments.len())
+                    tf!("None of the {0} comments checked mention a timestamp.", data.comments.len())
                 }
             } else if reached.is_empty() {
-                tf!("Comments appear here as the video reaches the moment they mention ({total} so far).", "Комментарии появятся в соответствующие моменты видео (пока найдено {total}).")
+                tf!("Comments appear here as the video reaches the moment they mention ({0} so far).", total)
             } else if later > 0 {
-                tf!("{later} more later in the video", "Дальше по видео появятся другие комментарии ({later})")
+                tf!("{0} more later in the video", later)
             } else {
                 String::new()
             }));
@@ -1484,7 +1484,7 @@ impl Render for WatchPage {
                 let c = self.render_comments(w, cx);
                 div().flex().flex_col().child(i).child(c).into_any_element()
             }
-            (Load::Error(e), _) => div().py_4().text_color(p.text2).child(tf!("Could not load video details: {e}", "Не удалось загрузить сведения о видео ({e})")).into_any_element(),
+            (Load::Error(e), _) => div().py_4().text_color(p.text2).child(tf!("Could not load video details: {0}", e)).into_any_element(),
             _ => spinner(cx).into_any_element(),
         };
         let chapters_panel = self.render_chapters_panel(cx);

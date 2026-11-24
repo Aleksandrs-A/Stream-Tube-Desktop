@@ -458,7 +458,7 @@ impl Render for PlayerView {
                     .text_sm()
                     .cursor_pointer()
                     .child(div().size_2().rounded_full().bg(rgb(services::sponsor_category_color(&seg.category))))
-                    .child(tf!("Skip {}", "Пропустить «{}»", translate(services::sponsor_category_name(&seg.category))))
+                    .child(tf!("Skip {0}", translate(services::sponsor_category_name(&seg.category))))
                     .child(icon("skip-forward").size_4().text_color(white()))
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
@@ -1410,7 +1410,7 @@ impl PlayerView {
                             }
                         })),
                     )
-                    .child(div().px_4().pt_1().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(tf!("Source: {source}, libmpv", "Источник {source}, libmpv")));
+                    .child(div().px_4().pt_1().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(tf!("Source: {0}, libmpv", source)));
             }
             Menu::Quality => {
                 let cur = pl.quality;

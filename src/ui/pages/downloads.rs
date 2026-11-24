@@ -28,8 +28,8 @@ impl Render for DownloadsPage {
             let (status, color): (String, Hsla) = match &j.status {
                 JobStatus::Queued => (t("Queued").into(), p.text2),
                 JobStatus::Running => (if j.detail.is_empty() { t("Starting…").into() } else { j.detail.clone() }, p.text2),
-                JobStatus::Done(path) => (tf!("Saved to {path}", "Сохранено в {path}"), rgb(0x2ba640).into()),
-                JobStatus::Failed(e) => (tf!("Failed: {e}", "Ошибка ({e})"), rgb(0xff4e45).into()),
+                JobStatus::Done(path) => (tf!("Saved to {0}", path), rgb(0x2ba640).into()),
+                JobStatus::Failed(e) => (tf!("Failed: {0}", e), rgb(0xff4e45).into()),
                 JobStatus::Cancelled => (t("Cancelled").into(), p.text3),
             };
             let done_path = if let JobStatus::Done(path) = &j.status { Some(path.clone()) } else { None };
@@ -57,7 +57,7 @@ impl Render for DownloadsPage {
                             .min_w_0()
                             .gap_2()
                             .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).truncate().child(j.video.title.clone()))
-                            .child(div().text_xs().text_color(p.text2).child(tf!("{}, format {}", "{}, формат {}", j.video.channel_name, j.format)))
+                            .child(div().text_xs().text_color(p.text2).child(tf!("{0}, format {1}", j.video.channel_name, j.format)))
                             .when(running, |d| {
                                 d.child(div().w_full().h(px(4.)).rounded_full().bg(p.hover).child(div().h_full().rounded_full().w(relative(j.progress.clamp(0.0, 1.0))).bg(p.accent)))
                             })
@@ -118,11 +118,7 @@ impl Render for DownloadsPage {
                                     })),
                             ),
                     )
-                    .child(div().text_sm().text_color(p.text2).child(tf!(
-                        "Saving to {dir}. Engine {}",
-                        "Папка загрузок {dir}. Движок {}",
-                        if ytdlp { t("yt-dlp (all qualities, SponsorBlock chapters)") } else { t("built-in (combined 360p/720p or audio only). Install yt-dlp for more") }
-                    )))
+                    .child(div().text_sm().text_color(p.text2).child(tf!("Saving to {0}. Engine {1}", dir, if ytdlp { t("yt-dlp (all qualities, SponsorBlock chapters)") } else { t("built-in (combined 360p/720p or audio only). Install yt-dlp for more") })))
                     .child(list),
             ),
         )

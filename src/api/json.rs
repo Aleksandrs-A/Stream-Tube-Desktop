@@ -293,32 +293,59 @@ pub fn now() -> i64 {
 }
 
 pub fn relative_from_ts(ts: i64) -> String {
+    use crate::i18n::{self, AppLanguage};
+
     let d = (now() - ts).max(0);
-    let (n, u, ru) = if d < 60 {
-        return crate::i18n::t("just now").into();
+    let (n, messages, ru) = if d < 60 {
+        return i18n::t("just now").into();
     } else if d < 3600 {
-        (d / 60, "minute", ["минуту", "минуты", "минут"])
+        (
+            d / 60,
+            ["{0} minute ago", "{0} minutes ago"],
+            ["минуту", "минуты", "минут"],
+        )
     } else if d < 86400 {
-        (d / 3600, "hour", ["час", "часа", "часов"])
+        (
+            d / 3600,
+            ["{0} hour ago", "{0} hours ago"],
+            ["час", "часа", "часов"],
+        )
     } else if d < 7 * 86400 {
-        (d / 86400, "day", ["день", "дня", "дней"])
+        (
+            d / 86400,
+            ["{0} day ago", "{0} days ago"],
+            ["день", "дня", "дней"],
+        )
     } else if d < 30 * 86400 {
-        (d / (7 * 86400), "week", ["неделю", "недели", "недель"])
+        (
+            d / (7 * 86400),
+            ["{0} week ago", "{0} weeks ago"],
+            ["неделю", "недели", "недель"],
+        )
     } else if d < 365 * 86400 {
-        (d / (30 * 86400), "month", ["месяц", "месяца", "месяцев"])
+        (
+            d / (30 * 86400),
+            ["{0} month ago", "{0} months ago"],
+            ["месяц", "месяца", "месяцев"],
+        )
     } else {
-        (d / (365 * 86400), "year", ["год", "года", "лет"])
+        (
+            d / (365 * 86400),
+            ["{0} year ago", "{0} years ago"],
+            ["год", "года", "лет"],
+        )
     };
-    if crate::i18n::is_russian() {
-        let form = match (n % 100, n % 10) {
-            (11..=14, _) => ru[2],
-            (_, 1) => ru[0],
-            (_, 2..=4) => ru[1],
-            _ => ru[2],
-        };
-        return format!("{n} {form} назад");
+
+    if i18n::language() != AppLanguage::Russian {
+        return i18n::format(messages[usize::from(n != 1)], &[&n]);
     }
-    format!("{n} {u}{} ago", if n == 1 { "" } else { "s" })
+    let form = match (n % 100, n % 10) {
+        (11..=14, _) => ru[2],
+        (_, 1) => ru[0],
+        (_, 2..=4) => ru[1],
+        _ => ru[2],
+    };
+    format!("{n} {form} назад")
 }
 
 /// "27K", "1.2M", "27,124", "3 likes" -> a number; None without digits.

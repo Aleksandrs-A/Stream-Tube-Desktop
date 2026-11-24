@@ -178,13 +178,13 @@ pub fn check_now(manual: bool, cx: &mut App) {
             Ok(None) => {
                 set_status(Status::UpToDate, cx);
                 if manual {
-                    toast(cx, tf!("Stream Tube {} is the latest version", "У вас последняя версия Stream Tube ({})", current_version()));
+                    toast(cx, tf!("Stream Tube {0} is the latest version", current_version()));
                 }
             }
             Err(e) => {
                 set_status(if manual { Status::Error(e.to_string()) } else { Status::Idle }, cx);
                 if manual {
-                    toast(cx, tf!("Could not check for updates: {e}", "Не удалось проверить обновления ({e})"));
+                    toast(cx, tf!("Could not check for updates: {0}", e));
                 }
             }
         });
@@ -277,7 +277,7 @@ pub fn install(cx: &mut App) {
             Ok(path) => run_installer(&path, cx),
             Err(e) => {
                 set_status(Status::Available(rel), cx);
-                toast(cx, tf!("Update failed: {e}", "Не удалось обновить приложение ({e})"));
+                toast(cx, tf!("Update failed: {0}", e));
             }
         });
     })
@@ -292,7 +292,7 @@ fn run_installer(path: &std::path::Path, cx: &mut App) {
             store::kv_set("update_skip", "");
             cx.quit();
         }
-        Err(e) => toast(cx, tf!("Could not start the installer: {e}", "Не удалось запустить установщик ({e})")),
+        Err(e) => toast(cx, tf!("Could not start the installer: {0}", e)),
     }
 }
 

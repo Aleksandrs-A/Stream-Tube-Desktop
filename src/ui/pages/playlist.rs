@@ -132,7 +132,7 @@ impl PlaylistPage {
             self.title = pl.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| "Playlist".into());
             self.protected = pl.as_ref().map(|p| p.protected).unwrap_or(false);
             let items = store::playlist_items(id);
-            self.count_text = Some(tf!("{} videos", "Видео {}", items.len()));
+            self.count_text = Some(tf!("{0} videos", items.len()));
             self.owner = Some(("You".into(), None));
             self.videos = Load::Ready(items);
         }
@@ -252,8 +252,8 @@ impl Render for PlaylistPage {
             })
             .child({
                 let total: u64 = videos.iter().filter_map(|v| v.duration_secs).sum();
-                let count = self.count_text.clone().unwrap_or_else(|| tf!("{} videos", "Видео {}", videos.len()));
-                let dur = if total >= 3600 { tf!("{} h {} min", "{} ч {} мин", total / 3600, (total % 3600) / 60) } else if total > 0 { tf!("{} min", "{} мин", total / 60) } else { String::new() };
+                let count = self.count_text.clone().unwrap_or_else(|| tf!("{0} videos", videos.len()));
+                let dur = if total >= 3600 { tf!("{0} h {1} min", total / 3600, (total % 3600) / 60) } else if total > 0 { tf!("{0} min", total / 60) } else { String::new() };
                 div().text_xs().text_color(p.text2).child(if dur.is_empty() { count } else { format!("{count}, {dur}") })
             })
             .child(

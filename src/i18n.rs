@@ -1,7 +1,8 @@
 //! Interface language, independent of the language requested from YouTube.
-mod ru;
-
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::{Display, Write};
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub enum AppLanguage {
@@ -15,36 +16,95 @@ pub enum AppLanguage {
 impl AppLanguage {
     pub const OPTIONS: &[(Self, &str)] = &[(Self::English, "English"), (Self::Russian, "Русский")];
 
-    fn translate(self, source: &str) -> &str {
+    fn code(self) -> &'static str {
         match self {
-            Self::English => source,
-            Self::Russian => ru::translate(source),
+            Self::English => "en",
+            Self::Russian => "ru",
         }
+    }
+
+    fn catalog(self) -> Option<&'static Catalog> {
+        static RU: Catalog = Catalog::new(include_str!("i18n/locales/ru.json"));
+
+        Some(match self {
+            Self::English => return None,
+            Self::Russian => &RU,
+        })
+    }
+
+    fn translate(self, source: &str) -> &str {
+        self.catalog()
+            .and_then(|catalog| catalog.messages().get(source))
+            .map(String::as_str)
+            .unwrap_or(source)
     }
 }
 
-pub fn is_russian() -> bool {
-    crate::store::settings_snapshot().app_language == AppLanguage::Russian
+struct Catalog {
+    source: &'static str,
+    messages: OnceLock<HashMap<String, String>>,
+}
+
+impl Catalog {
+    const fn new(source: &'static str) -> Self {
+        Self {
+            source,
+            messages: OnceLock::new(),
+        }
+    }
+
+    fn messages(&self) -> &HashMap<String, String> {
+        self.messages.get_or_init(|| {
+            serde_json::from_str(self.source).expect("valid embedded interface catalog")
+        })
+    }
+}
+
+pub fn language() -> AppLanguage {
+    crate::store::settings_snapshot().app_language
 }
 
 pub fn t(source: &str) -> &str {
-    crate::store::settings_snapshot()
-        .app_language
-        .translate(source)
+    language().translate(source)
 }
 
 pub fn apply_component_locale() {
-    gpui_kit::component::set_locale(if is_russian() { "ru" } else { "en" });
+    gpui_kit::component::set_locale(language().code());
 }
 
-// Both messages are format strings so Rust checks their placeholders.
-macro_rules! tf {
-    ($en:literal, $ru:literal $(, $($args:tt)+)?) => {
-        if $crate::i18n::is_russian() {
-            format!($ru $(, $($args)+)?)
+pub fn format(source: &str, args: &[&dyn Display]) -> String {
+    format_template(t(source), args)
+}
+
+fn format_template(template: &str, args: &[&dyn Display]) -> String {
+    let mut message = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some((prefix, field_and_tail)) = rest.split_once('{') {
+        let Some((field, tail)) = field_and_tail.split_once('}') else {
+            break;
+        };
+        message.push_str(prefix);
+        if let Some(value) = field
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| args.get(index))
+        {
+            write!(message, "{value}").expect("writing to a string");
         } else {
-            format!($en $(, $($args)+)?)
+            message.push('{');
+            message.push_str(field);
+            message.push('}');
         }
+        rest = tail;
+    }
+    message.push_str(rest);
+    message
+}
+
+// Catalogs can reorder arguments. Apply Rust's numeric formats at the call site.
+macro_rules! tf {
+    ($source:expr $(, $arg:expr)* $(,)?) => {
+        $crate::i18n::format($source, &[$(&($arg) as &dyn std::fmt::Display),*])
     };
 }
 
@@ -52,7 +112,7 @@ pub(crate) use tf;
 
 #[cfg(test)]
 mod tests {
-    use super::AppLanguage;
+    use super::{AppLanguage, format_template};
     use crate::store::Settings;
 
     #[test]
@@ -81,6 +141,60 @@ mod tests {
         assert_eq!(
             AppLanguage::Russian.translate("An untranslated label"),
             "An untranslated label"
+        );
+    }
+
+    #[test]
+    fn every_language_has_the_same_messages_and_arguments() {
+        let reference = AppLanguage::Russian.catalog().unwrap().messages();
+        let placeholders = |text: &str| {
+            let mut slots: Vec<_> = text
+                .split('{')
+                .skip(1)
+                .filter_map(|part| part.split_once('}'))
+                .filter_map(|(field, _)| field.parse::<usize>().ok())
+                .collect();
+            slots.sort_unstable();
+            slots
+        };
+        for &(language, _) in AppLanguage::OPTIONS {
+            let saved = serde_json::to_value(language).unwrap();
+            assert_eq!(saved, language.code());
+            assert_eq!(
+                serde_json::from_value::<AppLanguage>(saved).unwrap(),
+                language
+            );
+            let Some(catalog) = language.catalog() else {
+                continue;
+            };
+            let messages = catalog.messages();
+            assert_eq!(messages.len(), reference.len(), "{}", language.code());
+            for source in reference.keys() {
+                let translated = &messages[source];
+                assert!(
+                    !translated.trim().is_empty(),
+                    "{}: {source}",
+                    language.code()
+                );
+                assert_eq!(
+                    placeholders(translated),
+                    placeholders(source),
+                    "{}: {source}",
+                    language.code()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn formatting_can_reorder_arguments_without_interpreting_inserted_text() {
+        assert_eq!(
+            format_template("{1} / {0}", &[&"title {1}", &42]),
+            "42 / title {1}"
+        );
+        assert_eq!(
+            format_template("{0}%", &[&format_args!("{:.1}", 1.24)]),
+            "1.2%"
         );
     }
 }

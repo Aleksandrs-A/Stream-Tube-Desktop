@@ -585,7 +585,7 @@ impl SettingsPage {
             .child({
                 let (desc, ctl) = match crate::api::web::account_name().filter(|_| crate::api::web::connected()) {
                     Some(name) => (
-                        tf!("Connected as {name}. Videos you watch here show in your YouTube history and resume where you stopped on your other devices", "Вы вошли как {name}. Просмотры появятся в истории YouTube. На других устройствах можно продолжить с места остановки."),
+                        tf!("Connected as {0}. Videos you watch here show in your YouTube history and resume where you stopped on your other devices", name),
                         pill("web-out", Some("unlink"), "Disconnect", cx).on_click(|_, _, cx| crate::ui::app::disconnect_web(cx)),
                     ),
                     None => (
@@ -673,7 +673,7 @@ impl SettingsPage {
             .child(row(
                 "External player",
                 &match crate::downloads::detect_player() {
-                    Some((name, _)) => tf!("Leave empty to use {name}, which is installed. Or enter the path to another player", "Оставьте поле пустым для выбора {name} или укажите путь к другому плееру"),
+                    Some((name, _)) => tf!("Leave empty to use {0}, which is installed. Or enter the path to another player", name),
                     None => "Leave empty to use VLC or mpv when installed, or your default player. Or enter the path to another player".to_string(),
                 },
                 text_field(&self.input("external"), 320., cx),
@@ -790,7 +790,7 @@ impl SettingsPage {
                 .items_center()
                 .justify_between()
                 .py_3()
-                .child(div().text_sm().text_color(p.text2).child(tf!("Couldn't load stats: {e}", "Не удалось загрузить статистику ({e})")))
+                .child(div().text_sm().text_color(p.text2).child(tf!("Couldn't load stats: {0}", e)))
                 .child(pill("sb-retry", Some("refresh-cw"), "Retry", cx).on_click(cx.listener(|this, _, _, cx| this.load_sb_stats(cx))))
                 .into_any_element(),
             Some(Ok(u)) => {
@@ -808,7 +808,7 @@ impl SettingsPage {
                             .text_sm()
                             .text_color(p.text)
                             .child(icon("shield-check").size_4().text_color(p.accent))
-                            .child(if u.user_name.is_empty() { t("Your contributions").to_string() } else { tf!("{}, your contributions", "Ваш вклад ({})", u.user_name) })
+                            .child(if u.user_name.is_empty() { t("Your contributions").to_string() } else { tf!("{0}, your contributions", u.user_name) })
                             .when(u.vip, |d| d.child(div().px_2().rounded_full().bg(p.accent).text_xs().text_color(white()).child("VIP"))),
                     )
                     .child(
@@ -821,7 +821,7 @@ impl SettingsPage {
                             .child(stat(format!("{:.1}", u.reputation), "reputation")),
                     )
                     .when(u.segments == 0, |d| d.child(div().text_xs().text_color(p.text2).child(t("No submissions yet for this ID. Segments you submit will count here."))))
-                    .when(u.warnings > 0, |d| d.child(div().text_xs().text_color(p.text2).child(tf!("{} active warning(s) on this account", "Активных предупреждений в аккаунте {}", u.warnings))))
+                    .when(u.warnings > 0, |d| d.child(div().text_xs().text_color(p.text2).child(tf!("{0} active warning(s) on this account", u.warnings))))
                     .into_any_element()
             }
         };
@@ -982,7 +982,7 @@ impl SettingsPage {
             .child(row(
                 "yt-dlp path",
                 &match &self.ytdlp_version {
-                    Some(v) => tf!("Detected yt-dlp {v}", "Найден yt-dlp {v}"),
+                    Some(v) => tf!("Detected yt-dlp {0}", v),
                     None => "yt-dlp not found — install it for downloads in all qualities and the fallback extractor".into(),
                 },
                 text_field(&self.input("ytdlp"), 320., cx),
@@ -1020,7 +1020,7 @@ impl SettingsPage {
             .child(row(
                 "yt-dlp",
                 &match &self.ytdlp_version {
-                    Some(v) => tf!("Installed ({v}). Downloads in every quality, with SponsorBlock chapters", "Установлен ({v}). Поддерживает загрузки в любом качестве и главы SponsorBlock."),
+                    Some(v) => tf!("Installed ({0}). Downloads in every quality, with SponsorBlock chapters", v),
                     None => "Needed for downloads above 360p. Stream Tube can fetch it for you".into(),
                 },
                 if let Some(f) = crate::downloads::ytdlp_fetch() {
@@ -1028,7 +1028,7 @@ impl SettingsPage {
                 } else if self.ytdlp_version.is_some() {
                     div().into_any_element()
                 } else {
-                    pill("get-ytdlp", Some("download"), &tf!("Get yt-dlp ({})", "Установить yt-dlp ({})", crate::downloads::YTDLP_SIZE), cx)
+                    pill("get-ytdlp", Some("download"), &tf!("Get yt-dlp ({0})", crate::downloads::YTDLP_SIZE), cx)
                         .on_click(|_, _, cx| crate::downloads::fetch_ytdlp(cx))
                         .into_any_element()
                 },
@@ -1044,7 +1044,7 @@ impl SettingsPage {
                 if let Some(f) = crate::downloads::ffmpeg_fetch() {
                     fetch_progress("ffmpeg-prog", f, cx)
                 } else if self.ffmpeg_found == Some(false) {
-                    pill("get-ffmpeg", Some("download"), &tf!("Get FFmpeg ({})", "Установить FFmpeg ({})", crate::downloads::FFMPEG_SIZE), cx)
+                    pill("get-ffmpeg", Some("download"), &tf!("Get FFmpeg ({0})", crate::downloads::FFMPEG_SIZE), cx)
                         .on_click(|_, _, cx| crate::downloads::fetch_ffmpeg(cx))
                         .into_any_element()
                 } else {
@@ -1063,7 +1063,7 @@ impl SettingsPage {
             .flex()
             .flex_col()
             .gap_6()
-            .child(div().text_sm().text_color(p.text2).child(tf!("{n_subs} subscriptions, {n_hist} history entries, {n_pl} playlists, stored in {}", "Подписок {n_subs}, записей истории {n_hist}, плейлистов {n_pl}. Папка хранения {}", store::data_dir().display())))
+            .child(div().text_sm().text_color(p.text2).child(tf!("{0} subscriptions, {1} history entries, {2} playlists, stored in {3}", n_subs, n_hist, n_pl, store::data_dir().display())))
             .child(
                 card(cx)
                     .child(row(
@@ -1078,7 +1078,7 @@ impl SettingsPage {
                                         let _ = cx.update(|cx| {
                                             match res {
                                                 Ok(r) => toast(cx, r.to_string()),
-                                                Err(e) => toast(cx, tf!("Import failed: {e}", "Не удалось импортировать ({e})")),
+                                                Err(e) => toast(cx, tf!("Import failed: {0}", e)),
                                             }
                                             cx.set_global(crate::ui::cards::Watched(store::progress_map()));
                                             cx.refresh_windows();
@@ -1101,7 +1101,7 @@ impl SettingsPage {
         let s = store::settings_snapshot();
         let mpv = crate::player::mpv::available();
         card(cx)
-            .child(row("Stream Tube", &tf!("Version {}", "Версия {}", env!("CARGO_PKG_VERSION")), div(), cx))
+            .child(row("Stream Tube", &tf!("Version {0}", env!("CARGO_PKG_VERSION")), div(), cx))
             .child(row("Video engine", if mpv { "libmpv" } else if cfg!(windows) { "libmpv-2.dll not found" } else { "libmpv not found (install the libmpv package)" }, div(), cx))
             .child(row("yt-dlp", self.ytdlp_version.as_deref().unwrap_or("not installed"), div(), cx))
             .child({
@@ -1111,9 +1111,9 @@ impl SettingsPage {
                     Status::Idle => t("Pre-releases included").to_string(),
                     Status::Checking => t("Checking…").to_string(),
                     Status::UpToDate => t("You have the latest version").to_string(),
-                    Status::Available(r) => tf!("{} is available", "Доступна версия {}", r.name),
-                    Status::Downloading(_, f) => tf!("Downloading… {:.0}%", "Загрузка… {:.0}%", f * 100.0),
-                    Status::Error(e) => tf!("Could not check: {e}", "Не удалось проверить обновления ({e})"),
+                    Status::Available(r) => tf!("{0} is available", r.name),
+                    Status::Downloading(_, f) => tf!("Downloading… {0}%", format_args!("{:.0}", f * 100.0)),
+                    Status::Error(e) => tf!("Could not check: {0}", e),
                 };
                 let btn = match &status {
                     Status::Available(_) => pill("upd-show", Some("download"), "Update", cx).on_click(|_, window, cx| crate::ui::app::open_dialog(crate::ui::app::Dialog::Update, window, cx)),
@@ -1148,8 +1148,8 @@ fn export_button(id: &'static str, name: &'static str, kind: ExportKind, cx: &Ap
                 })
                 .await;
                 let _ = cx.update(|cx| match res {
-                    Ok(_) => toast(cx, tf!("Exported to {}", "Экспортировано в {}", path.display())),
-                    Err(e) => toast(cx, tf!("Export failed: {e}", "Не удалось экспортировать ({e})")),
+                    Ok(_) => toast(cx, tf!("Exported to {0}", path.display())),
+                    Err(e) => toast(cx, tf!("Export failed: {0}", e)),
                 });
             }
         })
@@ -1236,7 +1236,7 @@ impl Render for SettingsPage {
             QUERY.with(|q| q.borrow_mut().clear());
             return page_scroll("settings-scroll", &self.scroll).child(
                 div().flex().justify_center().gap_8().px_6().pt_6().pb_24().child(nav).child(
-                    div().flex().flex_col().gap_4().flex_1().max_w(px(860.)).min_w_0().child(section_title(tf!("Results for “{query}”", "Результаты поиска «{query}»"), cx).text_2xl()).child(all),
+                    div().flex().flex_col().gap_4().flex_1().max_w(px(860.)).min_w_0().child(section_title(tf!("Results for “{0}”", query), cx).text_2xl()).child(all),
                 ),
             );
         }
@@ -1274,7 +1274,7 @@ impl Render for SettingsPage {
 fn fetch_progress(id: &'static str, f: crate::downloads::ToolFetch, cx: &App) -> AnyElement {
     let p = pal(cx);
     let (label, frac) = match f {
-        crate::downloads::ToolFetch::Downloading(n) => (tf!("Downloading… {n}%", "Загрузка… {n}%"), n as f32 / 100.0),
+        crate::downloads::ToolFetch::Downloading(n) => (tf!("Downloading… {0}%", n), n as f32 / 100.0),
         crate::downloads::ToolFetch::Unpacking => (t("Unpacking…").to_string(), 1.0),
     };
     div()

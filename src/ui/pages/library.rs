@@ -140,7 +140,7 @@ impl HistoryPage {
                     if let Some(Load::Ready(list)) = &mut t.yt {
                         list.insert(pos.min(list.len()), removed);
                     }
-                    toast(cx, tf!("Couldn't remove it from YouTube: {}", "Не удалось удалить запись из истории YouTube ({})", crate::ui::friendly_error(&e.to_string())));
+                    toast(cx, tf!("Couldn't remove it from YouTube: {0}", crate::ui::friendly_error(&e.to_string())));
                     cx.notify();
                 }
             });
@@ -340,7 +340,7 @@ impl Render for LibraryPage {
                     .w(w)
                     .cursor_pointer()
                     .on_click(move |_, window, cx| navigate(Route::LocalPlaylist(id), window, cx))
-                    .child(playlist_thumb(pl.thumbnail.clone(), Some(tf!("{} videos", "Видео {}", pl.count)), w, w * (9. / 16.), cx))
+                    .child(playlist_thumb(pl.thumbnail.clone(), Some(tf!("{0} videos", pl.count)), w, w * (9. / 16.), cx))
                     .child(
                         div()
                             .flex()
@@ -409,7 +409,7 @@ impl Render for LibraryPage {
                 })
                 .when_some(self.yt.as_ref().map(|l| match l {
                     Load::Loading => spinner(cx).into_any_element(),
-                    Load::Error(e) => div().text_sm().text_color(p.text2).child(tf!("Could not load your YouTube playlists: {e}", "Не удалось загрузить плейлисты YouTube ({e})")).into_any_element(),
+                    Load::Error(e) => div().text_sm().text_color(p.text2).child(tf!("Could not load your YouTube playlists: {0}", e)).into_any_element(),
                     Load::Ready(l) if l.is_empty() => div().text_sm().text_color(p.text2).child(translate("No playlists on your account yet")).into_any_element(),
                     Load::Ready(l) => grid(l.iter().map(|pl| playlist_card(pl, w, cx)).collect(), width).into_any_element(),
                 }), |d, body| {

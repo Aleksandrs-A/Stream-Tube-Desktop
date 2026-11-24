@@ -76,7 +76,7 @@ pub fn start_many(videos: Vec<VideoItem>, cx: &mut App) {
         start(v, None, cx);
     }
     if n > 1 {
-        toast(cx, tf!("Downloading {n} videos", "Загрузка видео ({n})"));
+        toast(cx, tf!("Downloading {0} videos", n));
     }
 }
 
@@ -118,7 +118,7 @@ pub fn start(video: VideoItem, format: Option<String>, cx: &mut App) {
             translate("Higher quality downloads use yt-dlp"),
             vec![
                 (
-                    tf!("Get yt-dlp ({YTDLP_SIZE})", "Установить yt-dlp ({YTDLP_SIZE})").into(),
+                    tf!("Get yt-dlp ({0})", YTDLP_SIZE).into(),
                     Arc::new(move |_, cx: &mut App| {
                         PENDING.lock().push((video.clone(), Some(fmt.clone())));
                         fetch_ytdlp(cx);
@@ -142,7 +142,7 @@ pub fn start(video: VideoItem, format: Option<String>, cx: &mut App) {
             translate("Videos above 360p need FFmpeg to join video and audio"),
             vec![
                 (
-                    tf!("Get FFmpeg ({FFMPEG_SIZE})", "Установить FFmpeg ({FFMPEG_SIZE})").into(),
+                    tf!("Get FFmpeg ({0})", FFMPEG_SIZE).into(),
                     Arc::new(move |_, cx: &mut App| {
                         PENDING.lock().push((video.clone(), Some(fmt.clone())));
                         fetch_ffmpeg(cx);
@@ -166,7 +166,7 @@ pub fn start(video: VideoItem, format: Option<String>, cx: &mut App) {
     };
     let jobs = d.jobs.clone();
     jobs.lock().push(job.clone());
-    toast(cx, tf!("Downloading “{}”", "Загружается «{}»", video.title));
+    toast(cx, tf!("Downloading “{0}”", video.title));
     let jid = job.id;
     let cancel = job.cancel.clone();
     let jobs2 = jobs.clone();
@@ -374,7 +374,7 @@ fn ytdlp_run(bin: &str, dir: &std::path::Path, url: &str, fmt: &str, s: &store::
                 last_pct = pct;
                 let overall = if phase == 0 { pct / 100.0 * 0.9 } else { 0.9 + pct / 100.0 * 0.1 };
                 let what = if phase == 0 { "" } else { translate("Audio, ") };
-                let detail = if pct >= 100.0 { translate("Finishing…").to_string() } else { tf!("{what}{pct:.0}%, {speed}, {eta} left", "{what}{pct:.0}%, {speed}, осталось {eta}") };
+                let detail = if pct >= 100.0 { translate("Finishing…").to_string() } else { tf!("{0}{1}%, {2}, {3} left", what, format_args!("{:.0}", pct), speed, eta) };
                 progress(overall.min(0.99), &detail);
             } else if !line.starts_with('[') && !line.trim().is_empty() {
                 final_path = line.trim().to_string();
@@ -430,8 +430,8 @@ pub fn open_external_at(id: &str, time: f64, cx: &mut App) {
     cx.spawn(async move |cx| {
         let res = crate::ui::blocking(move || launch_external(&id, time, &custom)).await;
         let _ = cx.update(|cx| match res {
-            Ok(name) => toast(cx, tf!("Playing in {name}. Keep Stream Tube open while it plays", "Воспроизведение в {name}. Оставьте Stream Tube открытым.")),
-            Err(e) => toast(cx, tf!("Couldn't open a video player: {e}", "Не удалось открыть плеер ({e})")),
+            Ok(name) => toast(cx, tf!("Playing in {0}. Keep Stream Tube open while it plays", name)),
+            Err(e) => toast(cx, tf!("Couldn't open a video player: {0}", e)),
         });
     })
     .detach();
@@ -584,7 +584,7 @@ pub fn delete_file(id: u64, cx: &mut App) {
             Ok(()) => toast(cx, translate("Deleted from disk")),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                toast(cx, tf!("Could not delete: {e}", "Не удалось удалить файл ({e})"));
+                toast(cx, tf!("Could not delete: {0}", e));
                 return;
             }
         }
@@ -888,7 +888,7 @@ pub fn fetch_ffmpeg(cx: &mut App) {
                         start(v, f, cx);
                     }
                 }
-                Err(e) => toast(cx, tf!("FFmpeg download failed: {e}", "Не удалось загрузить FFmpeg ({e})")),
+                Err(e) => toast(cx, tf!("FFmpeg download failed: {0}", e)),
             }
         });
     })
@@ -942,7 +942,7 @@ pub fn fetch_ytdlp(cx: &mut App) {
                         start(v, f, cx);
                     }
                 }
-                Err(e) => toast(cx, tf!("yt-dlp download failed: {e}", "Не удалось загрузить yt-dlp ({e})")),
+                Err(e) => toast(cx, tf!("yt-dlp download failed: {0}", e)),
             }
         });
     })

@@ -271,7 +271,7 @@ impl Render for ChannelPage {
                                     .gap_2()
                                     .pt_2()
                                     .child(subscribe_button("ch-sub".into(), &d.info, subscribed, cx))
-                                    .when_some(speed, |el, sp| el.child(pill("ch-speed", Some("gauge"), tf!("{sp}x speed", "Скорость {sp}×"), cx)))
+                                    .when_some(speed, |el, sp| el.child(pill("ch-speed", Some("gauge"), tf!("{0}x speed", sp), cx)))
                                     .child(pill("ch-more", Some("ellipsis"), "", cx).w_9().px_0().justify_center().on_click(move |ev, window, cx| {
                                         let info = info2.clone();
                                         let info3 = info2.clone();

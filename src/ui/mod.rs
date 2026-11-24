@@ -341,8 +341,8 @@ pub fn friendly_error(err: &str) -> String {
     match status {
         Some(404) => return t("This page isn't available.").into(),
         Some(429) => return t("YouTube is rate limiting requests. Try again in a minute.").into(),
-        Some(s) if (400..500).contains(&s) => return tf!("YouTube rejected the request (HTTP {s}).", "YouTube отклонил запрос (HTTP {s})."),
-        Some(s) if s >= 500 => return tf!("YouTube had a problem (HTTP {s}). Try again.", "Ошибка YouTube (HTTP {s}). Попробуйте ещё раз."),
+        Some(s) if (400..500).contains(&s) => return tf!("YouTube rejected the request (HTTP {0}).", s),
+        Some(s) if s >= 500 => return tf!("YouTube had a problem (HTTP {0}). Try again.", s),
         _ => {}
     }
     if ["dns", "timed out", "timeout", "connect", "network", "resolve"].iter().any(|k| lower.contains(k)) {

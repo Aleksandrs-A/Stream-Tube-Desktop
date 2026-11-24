@@ -311,7 +311,7 @@ pub fn import_web_cookies(cx: &mut App) {
                 });
             }
             match res {
-                Ok(name) => toast(cx, tf!("Connected as {name}. What you watch now shows in your YouTube history.", "Вы вошли как {name}. Просмотры будут сохраняться в истории YouTube.")),
+                Ok(name) => toast(cx, tf!("Connected as {0}. What you watch now shows in your YouTube history.", name)),
                 Err(e) => toast(cx, crate::ui::friendly_error(&format!("{e:#}"))),
             }
             cx.refresh_windows();
@@ -684,7 +684,7 @@ impl AppView {
                             t.dialog = None;
                             t.login.code = None;
                             t.reload_page = true;
-                            toast(cx, tf!("Signed in as {}", "Выполнен вход в аккаунт «{}»", acc.name));
+                            toast(cx, tf!("Signed in as {0}", acc.name));
                             cx.notify();
                         });
                         // bring the account's history and subscriptions to this device
@@ -693,7 +693,7 @@ impl AppView {
                         let _ = this.update(cx, |t, cx| {
                             if let Ok(n) = res {
                                 if n > 0 {
-                                    toast(cx, tf!("Added {n} subscriptions from your account", "Добавлены подписки из аккаунта ({n})"));
+                                    toast(cx, tf!("Added {0} subscriptions from your account", n));
                                     t.reload_page = true;
                                     cx.notify();
                                 }
@@ -757,7 +757,7 @@ impl AppView {
                         if matches!(t.dialog, Some(Dialog::WebSignIn)) {
                             t.dialog = None;
                         }
-                        toast(cx, tf!("Connected as {name}. What you watch now shows in your YouTube history.", "Вы вошли как {name}. Просмотры будут сохраняться в истории YouTube."));
+                        toast(cx, tf!("Connected as {0}. What you watch now shows in your YouTube history.", name));
                         cx.refresh_windows();
                     }
                     Err(e) => {
@@ -822,7 +822,7 @@ impl AppView {
                         .gap_2()
                         .text_sm()
                         .text_color(p.text2)
-                        .child(tf!("Sign in to YouTube in the {browser} window that opened. It closes by itself when you're done.", "Войдите в YouTube в открывшемся окне {browser}. Оно закроется после входа."))
+                        .child(tf!("Sign in to YouTube in the {0} window that opened. It closes by itself when you're done.", browser))
                         .child(
                             div()
                                 .text_xs()
@@ -1024,7 +1024,7 @@ impl AppView {
                             let _ = cx.update(|cx| {
                                 match res {
                                     Ok(0) => toast(cx, t("Subscriptions are up to date")),
-                                    Ok(n) => toast(cx, tf!("Added {n} subscriptions", "Добавлены подписки ({n})")),
+                                    Ok(n) => toast(cx, tf!("Added {0} subscriptions", n)),
                                     Err(e) => toast(cx, crate::ui::friendly_error(&e.to_string())),
                                 }
                                 cx.refresh_windows();
@@ -1089,7 +1089,7 @@ impl AppView {
         }
         cx.set_global(OpenMenu(None));
         if self.tabs.len() >= MAX_TABS {
-            toast(cx, tf!("You can have up to {MAX_TABS} tabs open", "Можно открыть не более {MAX_TABS} вкладок"));
+            toast(cx, tf!("You can have up to {0} tabs open", MAX_TABS));
             return;
         }
         let id = self.next_tab_id;
@@ -1389,7 +1389,7 @@ impl AppView {
                     Ok(innertube::ResolvedUrl::Channel(id)) => a.go(Route::Channel(id), window, cx),
                     Ok(innertube::ResolvedUrl::Playlist(id)) => a.go(Route::Playlist(id), window, cx),
                     Ok(innertube::ResolvedUrl::Video(id)) => a.go(Route::Watch { id, playlist: None, start: None }, window, cx),
-                    Err(e) => toast(cx, tf!("Could not open link: {}", "Не удалось открыть ссылку ({})", crate::ui::friendly_error(&e.to_string()))),
+                    Err(e) => toast(cx, tf!("Could not open link: {0}", crate::ui::friendly_error(&e.to_string()))),
                 });
             })
             .detach();
@@ -1522,11 +1522,11 @@ impl AppView {
                 JobStatus::Queued => (t("Waiting…").to_string(), p.text2, true),
                 JobStatus::Running => (format!("{:.0}%{}", j.progress * 100.0, j.detail.split("at").nth(1).map(|s| format!(", {}", s.trim())).unwrap_or_default()), p.text2, true),
                 JobStatus::Done(path) => (
-                    std::fs::metadata(path).map(|m| tf!("{:.1} MB, {}", "{:.1} МБ, {}", m.len() as f64 / 1e6, j.format)).unwrap_or_else(|_| t("File missing").into()),
+                    std::fs::metadata(path).map(|m| tf!("{0} MB, {1}", format_args!("{:.1}", m.len() as f64 / 1e6), j.format)).unwrap_or_else(|_| t("File missing").into()),
                     p.text2,
                     false,
                 ),
-                JobStatus::Failed(e) => (tf!("Failed: {e}", "Ошибка ({e})"), rgb(0xff4e45).into(), false),
+                JobStatus::Failed(e) => (tf!("Failed: {0}", e), rgb(0xff4e45).into(), false),
                 JobStatus::Cancelled => (t("Cancelled").into(), p.text2, false),
             };
             let done_path = if let JobStatus::Done(pth) = &j.status { Some(pth.clone()) } else { None };
@@ -1911,13 +1911,13 @@ impl AppView {
                 (",", true) | ("<", _) => {
                     let s = pl.speed;
                     pl.set_speed(s - 0.25);
-                    crate::ui::toast(cx, tf!("Speed {:.2}x", "Скорость {:.2}×", (s - 0.25).max(0.25)));
+                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", (s - 0.25).max(0.25))));
                     true
                 }
                 (".", true) | (">", _) => {
                     let s = pl.speed;
                     pl.set_speed(s + 0.25);
-                    crate::ui::toast(cx, tf!("Speed {:.2}x", "Скорость {:.2}×", s + 0.25));
+                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", s + 0.25)));
                     true
                 }
                 ("home", _) => {
@@ -2294,7 +2294,7 @@ impl AppView {
                     row(
                         "s-subs-more".into(),
                         icon(if expanded { "chevron-up" } else { "chevron-down" }).size_5().text_color(p.text).into_any_element(),
-                        if expanded { t("Show fewer").into() } else { tf!("Show {} more", "Показать ещё {}", subs.len() - SHOWN) },
+                        if expanded { t("Show fewer").into() } else { tf!("Show {0} more", subs.len() - SHOWN) },
                         false,
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -2542,7 +2542,7 @@ impl AppView {
         let version = rel.name.trim_start_matches("Stream Tube").trim().trim_start_matches('v').to_string();
         let accent = crate::ui::app_icon::icon_accent(store::settings_snapshot().accent);
         let [c0, _, c2] = crate::ui::app_icon::accent_stops(accent);
-        let mut meta = vec![tf!("You have {}", "У вас установлена версия {}", crate::updater::current_version())];
+        let mut meta = vec![tf!("You have {0}", crate::updater::current_version())];
         if rel.prerelease {
             meta.push(t("Pre-release").into());
         }
@@ -2746,10 +2746,10 @@ impl AppView {
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 if store::playlist_contains(pl.id, &v2.id) {
                                     store::playlist_remove(pl.id, &v2.id);
-                                    toast(cx, tf!("Removed from {}", "Удалено из плейлиста «{}»", pl.name));
+                                    toast(cx, tf!("Removed from {0}", pl.name));
                                 } else {
                                     store::playlist_add(pl.id, &v2);
-                                    toast(cx, tf!("Saved to {}", "Добавлено в плейлист «{}»", pl.name));
+                                    toast(cx, tf!("Saved to playlist “{0}”", pl.name));
                                 }
                                 cx.notify();
                             }))
@@ -2777,7 +2777,7 @@ impl AppView {
                                     prompt_text("New playlist", "Playlist name", window, cx, move |name, _, cx| {
                                         let id = store::playlist_create(&name);
                                         store::playlist_add(id, &v4);
-                                        toast(cx, tf!("Saved to {name}", "Добавлено в плейлист «{name}»"));
+                                        toast(cx, tf!("Saved to playlist “{0}”", name));
                                     });
                                 });
                             })),

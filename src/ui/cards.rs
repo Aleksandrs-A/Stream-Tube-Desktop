@@ -547,10 +547,10 @@ pub fn subscribe_button(id: SharedString, c: &ChannelItem, subscribed: bool, cx:
             let on = !store::is_subscribed(&c.id);
             if on {
                 store::subscribe(&c.id, &c.name, c.avatar.as_deref());
-                toast(cx, tf!("Subscribed to {}", "Вы подписались на канал «{}»", c.name));
+                toast(cx, tf!("Subscribed to {0}", c.name));
             } else {
                 store::unsubscribe(&c.id);
-                toast(cx, tf!("Unsubscribed from {}", "Подписка на канал «{}» отменена", c.name));
+                toast(cx, tf!("Unsubscribed from {0}", c.name));
             }
             sync_subscription(c.id.clone(), on, cx);
             cx.refresh_windows();
