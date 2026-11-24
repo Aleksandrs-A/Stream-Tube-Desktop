@@ -42,7 +42,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Home, Shorts, Subscriptions, Explore categories, channels (including their courses and shows), playlists and search, with search suggestions and your recent searches
 - A personal Home without an account: "For you" recommends videos related to what you've watched and searched in the app, mixed with new uploads from your subscriptions. Signed in, Home is your own YouTube Home feed
 - A *Recently uploaded* chip on Home, like youtube.com's: videos from your Home feed and subscriptions uploaded in the last two weeks, newest first
-- Tabs: Ctrl+click anything (or *Open in new tab* in a video's menu) to open it in the background, and switch with Ctrl+Tab, Ctrl+1…9 or a click. Ctrl+T opens a new tab, Ctrl+W or a middle click closes one
+- Ctrl+click a link or middle-click a video to open it in a background tab. A video's menu also has *Open in new tab*. Switch with Ctrl+Tab, Ctrl+1…9 or a click. Ctrl+T opens a new tab. Ctrl+W or a middle click on the tab closes it.
 - Videos made for kids (YouTube Kids) play and download like any other video
 - Old video annotations are back: notes, speech bubbles and clickable links from YouTube's annotation archive, drawn over the video where they used to be (turn them off in *Settings → Player* or from the player's gear menu)
 - Arabic, Hebrew and other right-to-left text is shown in the right order
