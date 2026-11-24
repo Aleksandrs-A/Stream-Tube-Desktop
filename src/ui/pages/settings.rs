@@ -619,7 +619,7 @@ impl SettingsPage {
             .child(row("Audio only mode", "", switch("ao", s.audio_only, |s, v| s.audio_only = v, cx), cx))
             .child(row("Hardware decoding", "Takes effect after restart", switch("hw", s.hwdec, |s, v| s.hwdec = v, cx), cx))
             .child(row("Captions on by default", "", switch("cc", s.captions_enabled, |s, v| s.captions_enabled = v, cx), cx))
-            .child(row("Caption language", "Preferred subtitle track", self.dropdown("dd-cap", crate::locale::LANGUAGES, s.captions_lang.clone(), |s, v| s.captions_lang = v, cx), cx))
+            .child(row("Caption language", "Preferred subtitle track", self.dropdown("dd-cap", crate::locale::CAPTION_LANGUAGES, s.captions_lang.clone(), |s, v| s.captions_lang = v, cx), cx))
             .child(row("Caption size", "", self.choice("capsize", &[(30u32, "Small"), (40, "Medium"), (52, "Large"), (64, "Extra large")], s.caption_size, |s, v| s.caption_size = v, cx), cx))
             .child(row(
                 "Caption font",
