@@ -327,10 +327,6 @@ pub fn update_settings(f: impl FnOnce(&mut Settings)) {
     *settings_lock().write() = Arc::new(s);
 }
 
-pub fn ip_family() -> ureq::config::IpFamily {
-    if settings_snapshot().ipv4_only { ureq::config::IpFamily::Ipv4Only } else { ureq::config::IpFamily::Any }
-}
-
 /// Whether mpv can use this proxy itself (it only speaks HTTP proxies).
 pub fn mpv_http_proxy(p: &str) -> bool {
     let p = p.trim().to_ascii_lowercase();

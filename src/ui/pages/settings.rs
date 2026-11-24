@@ -970,7 +970,7 @@ impl SettingsPage {
                 text_field(&self.input("ytdlp"), 320., cx),
                 cx,
             ))
-            .child(row("Use IPv4 only", "Avoids YouTube's “confirm you're not a bot” check on flagged IPv6 networks", switch("ipv4", s.ipv4_only, |s, v| s.ipv4_only = v, cx), cx))
+            .child(row("Use IPv4 only", "Force IPv4 for new requests. Turn this off if YouTube flags your IPv4 connection.", switch("ipv4", s.ipv4_only, |s, v| s.ipv4_only = v, cx), cx))
             .child(row("Proxy", "Restart required", text_field(&self.input("proxy"), 320., cx), cx))
             .child(row("Update yt-dlp", "", pill("ytu", Some("refresh-cw"), "Update", cx).on_click(|_, _, cx| {
                 cx.spawn(async move |cx| {
