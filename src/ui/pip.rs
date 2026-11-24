@@ -1,5 +1,6 @@
 //! Picture-in-picture: the player in a small always-on-top window that stays
 //! visible over other apps.
+use super::slot::SlotFollower;
 use crate::player::controller::player;
 use crate::player::view::PlayerView;
 use crate::ui::*;
@@ -70,7 +71,16 @@ pub fn window_closed(id: WindowId, cx: &mut App) {
     }
 }
 
-pub fn placeholder() -> impl IntoElement {
+pub(super) fn main_surface(view: &Entity<PlayerView>, cx: &App) -> SlotFollower {
+    let content = if handle(cx).is_some() {
+        placeholder().into_any_element()
+    } else {
+        view.clone().into_any_element()
+    };
+    SlotFollower::new(cx, content)
+}
+
+fn placeholder() -> impl IntoElement {
     div()
         .size_full()
         .bg(black())

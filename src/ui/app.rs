@@ -24,11 +24,15 @@ pub enum Route {
     Search(String),
     Channel(String),
     Watch { id: String, playlist: Option<String>, start: Option<f64> },
-    Settings,
+    Settings(settings::Section),
     Downloads,
 }
 
 impl Route {
+    pub fn settings() -> Self {
+        Self::Settings(settings::Section::General)
+    }
+
     fn title(&self) -> String {
         match self {
             Route::Home => "Home".into(),
@@ -42,7 +46,7 @@ impl Route {
             Route::Search(q) => q.clone(),
             Route::Channel(_) => "Channel".into(),
             Route::Watch { .. } => "Watch".into(),
-            Route::Settings => "Settings".into(),
+            Route::Settings(_) => "Settings".into(),
             Route::Downloads => "Downloads".into(),
         }
     }
@@ -134,6 +138,10 @@ pub fn navigate(route: Route, window: &mut Window, cx: &mut App) {
         open_in_new_tab(route, false, window, cx);
         return;
     }
+    navigate_in_current_tab(route, window, cx);
+}
+
+pub(crate) fn navigate_in_current_tab(route: Route, window: &mut Window, cx: &mut App) {
     if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
         app.update(cx, |a, cx| a.go(route, window, cx));
     }
@@ -1033,7 +1041,7 @@ impl AppView {
                     MenuItem::new("history", "History", |window, cx| navigate(Route::History, window, cx)),
                     MenuItem::new("list-video", "Playlists", |window, cx| navigate(Route::Library, window, cx)),
                     MenuItem::new("download", "Downloads", |window, cx| navigate(Route::Downloads, window, cx)),
-                    MenuItem::new("settings", "Settings", |window, cx| navigate(Route::Settings, window, cx)),
+                    MenuItem::new("settings", "Settings", |window, cx| navigate(Route::settings(), window, cx)),
                     MenuItem::new("refresh-cw", "Sync subscriptions", |_, cx| {
                         cx.spawn(async move |cx| {
                             let res = blocking(crate::api::auth::sync_subscriptions).await;
@@ -1199,7 +1207,7 @@ impl AppView {
             Route::Search(_) => "search",
             Route::Channel(_) => "circle-user",
             Route::Watch { .. } => "play",
-            Route::Settings => "settings",
+            Route::Settings(_) => "settings",
             Route::Downloads => "download",
         }
     }
@@ -2159,7 +2167,7 @@ impl AppView {
                     .items_center()
                     .gap_1()
                     .child(self.render_dl_button(cx))
-                    .child(icon_button("settings", "settings", cx).on_click(cx.listener(|this, _, window, cx| this.go(Route::Settings, window, cx))))
+                    .child(icon_button("settings", "settings", cx).on_click(cx.listener(|this, _, window, cx| this.go(Route::settings(), window, cx))))
                     .child(self.account_button(cx))
                     .child(div().id("drag-c").w_3().h(px(56.)).window_control_area(WindowControlArea::Drag))
                     .when(!cfg!(target_os = "macos"), |d| d.child(window_controls(maximized, cx))),
@@ -2342,7 +2350,7 @@ impl AppView {
         }
         col = col
             .child(sep())
-            .child(entry("s-set", "settings", "Settings", Route::Settings, route == Route::Settings, cx));
+            .child(entry("s-set", "settings", "Settings", Route::settings(), matches!(route, Route::Settings(_)), cx));
         col.into_any_element()
     }
 
@@ -3040,14 +3048,7 @@ impl Render for AppView {
                         |d, t| d.opacity(0.35 + 0.65 * t),
                     ),
             )
-            .when(has_slot, |d| {
-                let content = if pip_open {
-                    crate::ui::pip::placeholder().into_any_element()
-                } else {
-                    self.main_view.clone().into_any_element()
-                };
-                d.child(crate::ui::slot::SlotFollower::new(cx, content))
-            })
+            .when(has_slot, |d| d.child(crate::ui::pip::main_surface(&self.main_view, cx)))
             // only over a thumbnail drawn on this page (the slot is cleared when a
             // preview stops or moves to another video)
             .when(
@@ -3216,7 +3217,7 @@ fn build_page(route: &Route, window: &mut Window, cx: &mut App) -> AnyView {
         Route::Watch { id, playlist, start } => {
             cx.new(|cx| watch::WatchPage::new(id.clone(), playlist.clone(), *start, window, cx)).into()
         }
-        Route::Settings => cx.new(|cx| settings::SettingsPage::new(window, cx)).into(),
+        Route::Settings(section) => cx.new(|cx| settings::SettingsPage::new(*section, window, cx)).into(),
         Route::Downloads => cx.new(|cx| downloads::DownloadsPage::new(window, cx)).into(),
     }
 }
