@@ -548,6 +548,22 @@ impl SettingsPage {
         card(cx)
             .child(row("Shorts: play next automatically", "Move to the next Short when one ends", switch("sha", s.shorts_autoadvance, |s, v| s.shorts_autoadvance = v, cx), cx))
             .child(row("Open Shorts in the regular player", "", switch("shp", s.shorts_in_player, |s, v| s.shorts_in_player = v, cx), cx))
+            .child(row(
+                "YouTube-style Shorts layout",
+                "Place channel info outside the video (like YouTube) with customizable controls",
+                switch("shyt", s.shorts_yt_layout, |s, v| s.shorts_yt_layout = v, cx),
+                cx,
+            ))
+            .when(s.shorts_yt_layout, |d| {
+                d.child(row(
+                    "Edge navigation buttons",
+                    "Place the up/down Short buttons on the far right edge",
+                    switch("shen", s.shorts_edge_nav, |s, v| s.shorts_edge_nav = v, cx),
+                    cx,
+                ))
+                .child(row("Show Subscribe button", "", switch("shsub", s.shorts_show_subscribe, |s, v| s.shorts_show_subscribe = v, cx), cx))
+                .child(row("Show Dislike button", "", switch("shdis", s.shorts_show_dislike, |s, v| s.shorts_show_dislike = v, cx), cx))
+            })
             .child(row("Remember last quality", "Use the quality you picked last as the default", switch("rq", s.remember_quality, |s, v| s.remember_quality = v, cx), cx))
             .child(row("Double-click for fullscreen", "", switch("dcf", s.double_click_fullscreen, |s, v| s.double_click_fullscreen = v, cx), cx))
             .child(row("Exit fullscreen when a video ends", "", switch("efe", s.exit_fullscreen_at_end, |s, v| s.exit_fullscreen_at_end = v, cx), cx))
