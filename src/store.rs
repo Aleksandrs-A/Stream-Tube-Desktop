@@ -26,6 +26,7 @@ pub struct Settings {
     pub ytdlp_path: String,
     pub proxy: String,
     // Player
+    pub theater_mode: bool,
     pub default_quality: u32,
     pub codec_pref: String,
     pub default_speed: f64,
@@ -148,6 +149,7 @@ impl Default for Settings {
             display_server: "auto".into(),
             ytdlp_path: String::new(),
             proxy: String::new(),
+            theater_mode: false,
             default_quality: 1080,
             codec_pref: "vp9".into(),
             default_speed: 1.0,
@@ -993,6 +995,16 @@ pub fn set_rating(video_id: &str, r: i8) {
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+
+    #[test]
+    fn theater_mode_round_trips_and_defaults_to_off() {
+        let old = settings_from_value(serde_json::json!({}));
+        assert!(!old.theater_mode);
+
+        let enabled = Settings { theater_mode: true, ..old };
+        let saved = serde_json::to_value(enabled).unwrap();
+        assert!(settings_from_value(saved).theater_mode);
+    }
 
     #[test]
     fn a_bad_field_keeps_the_others() {

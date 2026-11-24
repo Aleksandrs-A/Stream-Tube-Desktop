@@ -50,7 +50,6 @@ impl Route {
 
 #[derive(Clone, Copy, Default)]
 pub struct UiState {
-    pub theater: bool,
     pub fullscreen: bool,
     pub sidebar_open: bool,
     pub content_width: Pixels,
@@ -171,6 +170,11 @@ pub fn toggle_fullscreen(window: &mut Window, cx: &mut App) {
     window.toggle_fullscreen();
     let ui = cx.global_mut::<UiState>();
     ui.fullscreen = !ui.fullscreen;
+    cx.refresh_windows();
+}
+
+pub fn toggle_theater_mode(cx: &mut App) {
+    store::update_settings(|settings| settings.theater_mode = !settings.theater_mode);
     cx.refresh_windows();
 }
 
@@ -1954,10 +1958,7 @@ impl AppView {
         }
         match (k, m.shift) {
             ("f", false) => toggle_fullscreen(window, cx),
-            ("t", false) => {
-                cx.global_mut::<UiState>().theater ^= true;
-                cx.notify();
-            }
+            ("t", false) => toggle_theater_mode(cx),
             ("i", false) => {
                 if matches!(self.route, Route::Watch { .. }) {
                     if self.history.is_empty() {

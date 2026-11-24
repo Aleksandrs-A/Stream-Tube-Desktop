@@ -605,6 +605,12 @@ impl SettingsPage {
         let s = store::settings_snapshot();
         card(cx)
             .child(row(
+                "Theater mode",
+                "Use the wider player layout when opening a video",
+                switch("theater-mode", s.theater_mode, |s, v| s.theater_mode = v, cx),
+                cx,
+            ))
+            .child(row(
                 "Default quality",
                 "Maximum resolution to start videos at",
                 self.choice("q", &[(2160u32, "4K"), (1440, "1440p"), (1080, "1080p"), (720, "720p"), (480, "480p"), (360, "360p")], s.default_quality, |s, v| s.default_quality = v, cx),
