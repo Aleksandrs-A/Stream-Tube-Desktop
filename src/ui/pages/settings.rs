@@ -432,7 +432,7 @@ impl SettingsPage {
                 label = name.to_string();
             }
             let credit = match language {
-                AppLanguage::Azerbaijani => "Pomi (MrPomidor4ek)",
+                AppLanguage::Azerbaijani => "POMI (MrPOMIDOR4EK)",
                 AppLanguage::Russian => "Kushida",
                 _ => "",
             };
