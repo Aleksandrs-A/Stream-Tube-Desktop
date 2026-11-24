@@ -4,8 +4,8 @@ use crate::ui::widgets::*;
 use crate::ui::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 
-#[derive(Clone, Copy, PartialEq)]
-enum Section {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Section {
     General,
     Player,
     Premium,
@@ -59,7 +59,7 @@ pub struct SettingsPage {
 type Setter = fn(&mut Settings, String);
 
 impl SettingsPage {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(section: Section, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let s = store::settings_snapshot();
         let fields: Vec<(&'static str, String, &'static str, Setter)> = vec![
             ("region", s.region.clone(), "US", |s, v| s.region = v.to_uppercase()),
@@ -118,7 +118,7 @@ impl SettingsPage {
             }
         }));
         let mut page = Self {
-            section: Section::General,
+            section,
             scroll: ScrollHandle::new(),
             inputs,
             keyword,
@@ -134,7 +134,6 @@ impl SettingsPage {
         };
         page.load_sb_stats(cx);
         page.check_tools(cx);
-        page.section = Section::General;
         page
     }
 
