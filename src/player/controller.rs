@@ -998,6 +998,7 @@ impl Player {
     pub fn set_speed(&mut self, s: f64) {
         let s = (s * 100.0).round() / 100.0;
         let s = s.clamp(0.1, 5.0);
+        self.boost = None;
         self.speed = s;
         if let Some(m) = &self.mpv {
             m.set_f64("speed", s);

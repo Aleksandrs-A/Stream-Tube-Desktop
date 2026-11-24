@@ -104,6 +104,13 @@ impl PlayerView {
     fn controls_visible(&self, paused: bool) -> bool {
         paused || self.menu.is_some() || self.drag_seek.is_some() || Instant::now() < self.show_until
     }
+
+    fn finish_pointer_press(&mut self, cx: &mut Context<Self>) {
+        if self.press.take().is_some() && self.press_boosted {
+            self.player.update(cx, |p, _| p.end_boost());
+            cx.notify();
+        }
+    }
 }
 
 fn speed_label(s: f64) -> String {
@@ -129,6 +136,7 @@ impl Render for PlayerView {
         let show = self.controls_visible(paused) || mini && self.hovering;
         let ui = *cx.global::<UiState>();
         let scale = window.scale_factor();
+        let view = cx.entity().downgrade();
 
         // ── video surface ──
         let surface = div()
@@ -152,7 +160,13 @@ impl Render for PlayerView {
                             }
                         }
                     },
-                    |_, _, _, _| {},
+                    move |_, _, window, _| {
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                                let _ = view.update(cx, |view, cx| view.finish_pointer_press(cx));
+                            }
+                        });
+                    },
                 )
                 .absolute()
                 .size_full(),
@@ -201,15 +215,14 @@ impl Render for PlayerView {
                 this.hovering = *h;
                 if !*h {
                     this.hover_frac = None;
+                    this.finish_pointer_press(cx);
                 }
                 cx.notify();
             }))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
                 // the button was let go somewhere we didn't see
-                if this.press_boosted && ev.pressed_button != Some(MouseButton::Left) {
-                    this.press_boosted = false;
-                    this.press = None;
-                    this.player.update(cx, |p, _| p.end_boost());
+                if ev.pressed_button != Some(MouseButton::Left) {
+                    this.finish_pointer_press(cx);
                 }
                 // a seek or volume drag whose release we missed (something under
                 // the pointer kept it) ends here, where the button was last held
@@ -268,7 +281,7 @@ impl Render for PlayerView {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        if this.mini {
+                        if this.mini || this.pip {
                             return;
                         }
                         let at = Instant::now();
@@ -285,26 +298,6 @@ impl Render for PlayerView {
                             });
                         })
                         .detach();
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                        this.press = None;
-                        if this.press_boosted {
-                            this.player.update(cx, |p, _| p.end_boost());
-                            cx.notify();
-                        }
-                    }),
-                )
-                .on_mouse_up_out(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                        this.press = None;
-                        if std::mem::take(&mut this.press_boosted) {
-                            this.player.update(cx, |p, _| p.end_boost());
-                            cx.notify();
-                        }
                     }),
                 )
                 .on_mouse_down(

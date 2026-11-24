@@ -55,7 +55,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Keeps playing when minimized, or pauses and resumes when you come back
 - Live streams with live chat (Top chat or every message), and chatting when signed in
 - Shorts in a vertical player that moves to the next one by itself, or open them in the regular player. Shorts comments open their replies as threads too
-- Hold Space or press and hold on the video to play at 2x
+- Hold Space or press and hold the main video to play at 2x
 - Hover previews: rest the pointer on a thumbnail and it plays inside it, muted, with a seek bar to skip around
 - Most replayed graph with "jump ahead", ambient glow around the player (on or off from the player's gear menu), force original audio instead of auto-dubbing
 - A screenshot button in the player bar
