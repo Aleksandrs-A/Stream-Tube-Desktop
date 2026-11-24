@@ -328,11 +328,11 @@ impl Player {
                     ("duration", PropValue::Double(d)) => self.duration = d,
                     ("pause", PropValue::Flag(b)) => self.paused = b,
                     ("eof-reached", PropValue::Flag(b)) => {
-                        if b && !self.eof {
-                            self.eof = true;
+                        if b {
                             self.on_ended(cx);
+                        } else {
+                            self.eof = false;
                         }
-                        self.eof = b;
                     }
                     ("paused-for-cache", PropValue::Flag(b)) => self.buffering = b,
                     ("seeking", PropValue::Flag(b)) => self.seeking = b,
@@ -354,6 +354,19 @@ impl Player {
     }
 
     fn on_ended(&mut self, cx: &mut Context<Self>) {
+        let Some(video) = &self.video else { return };
+        if self.loading || self.error.is_some() || self.eof {
+            return;
+        }
+        let live = video.is_live || self.streams.as_ref().is_some_and(|info| info.is_live);
+        let position = self.mpv.as_ref().and_then(|mpv| mpv.get_f64("time-pos")).unwrap_or(self.time);
+        if !live && premature_eof(position, self.duration) {
+            self.time = position;
+            self.error = Some("Playback stopped before the end of the video.".into());
+            self.save_progress(true);
+            return;
+        }
+        self.eof = true;
         self.save_progress(true);
         if self.loop_video {
             self.seek_to(0.0);
@@ -696,6 +709,7 @@ impl Player {
         let joined = opts.join(",");
         let res = mpv.command(&["loadfile", &src, "replace", "-1", &joined]).or_else(|_| mpv.command(&["loadfile", &src, "replace", &joined]));
         if let Err(e) = res {
+            self.loading = false;
             self.error = Some(e.to_string());
         }
         cx.notify();
@@ -1142,6 +1156,26 @@ pub fn mpv_color(rgb: u32, opacity: u32) -> String {
 fn mpv_media_title_option(title: &str) -> String {
     // mpv's %length% quoting takes a byte count and keeps punctuation literal.
     format!("force-media-title=%{}%{title}", title.len())
+}
+
+fn premature_eof(position: f64, duration: f64) -> bool {
+    // libmpv can report EOF for truncated streams. Allow for the last frame's timestamp.
+    position.is_finite()
+        && position >= 0.0
+        && duration.is_finite()
+        && duration > 0.0
+        && duration - position > (duration * 0.02).clamp(1.0, 2.0)
+}
+
+#[cfg(test)]
+mod playback_end_tests {
+    #[::core::prelude::v1::test]
+    fn distinguishes_truncated_playback_from_a_normal_end() {
+        assert!(super::premature_eof(3.76, 12.0));
+        assert!(!super::premature_eof(11.96, 12.0));
+        assert!(!super::premature_eof(0.0, 0.0));
+        assert!(!super::premature_eof(0.0, 0.3));
+    }
 }
 
 #[cfg(test)]
