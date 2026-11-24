@@ -296,6 +296,21 @@ The [macOS build workflow](.github/workflows/macos.yml) builds and tests the
 Apple Silicon bundle on GitHub. It uploads a ZIP as a workflow artifact. Tagged
 release builds collect that ZIP in the project's draft release.
 
+#### macOS release checklist
+
+The following foreground checks passed on Apple Silicon for **0.7.2-alpha**
+(`c48a333`). [GitHub Actions build](https://github.com/wwessex/Stream-Tube-Desktop/actions/runs/45294866908)
+and [Apple Silicon ZIP](https://github.com/wwessex/Stream-Tube-Desktop/actions/runs/45294866908/artifacts/14875972585).
+
+- [x] Open **Settings** from the **Stream Tube** menu and with **⌘,**. Both open
+  General settings. **About** opens the About section directly.
+- [x] Open picture-in-picture (PiP) while playing a YouTube video. The main
+  window shows the PiP placeholder. **Return to player** restores the main
+  video at the PiP position and preserves both playing and paused states.
+- [x] With PiP open, enter and exit native fullscreen in TextEdit. PiP is visible
+  above TextEdit before fullscreen, in its fullscreen Space, and after returning
+  to the original Space.
+
 #### Check hardware decoding
 
 Enable *Settings → Player → Hardware decoding*, restart Stream Tube, and play a
