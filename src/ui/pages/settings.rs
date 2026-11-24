@@ -264,13 +264,21 @@ fn row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
     row_text(t(title), t(desc), control, cx)
 }
 
+fn settings_search_text(text: &str) -> String {
+    text.replace(['İ', 'ı'], "i").to_lowercase()
+}
+
+fn matches_settings_search(labels: &[&str]) -> bool {
+    QUERY.with(|query| {
+        let query = query.borrow();
+        query.is_empty()
+            || labels.iter().any(|label| settings_search_text(label).contains(query.as_str()))
+    })
+}
+
 fn row_text(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> Div {
     let p = pal(cx);
-    let hidden = QUERY.with(|q| {
-        let q = q.borrow();
-        !q.is_empty() && !title.to_lowercase().contains(q.as_str()) && !desc.to_lowercase().contains(q.as_str())
-    });
-    if hidden {
+    if !matches_settings_search(&[title, desc]) {
         return div();
     }
     div()
@@ -306,11 +314,7 @@ fn stacked_row(title: &str, desc: &str, control: impl IntoElement, cx: &App) -> 
     let title = t(title);
     let desc = t(desc);
     let p = pal(cx);
-    let hidden = QUERY.with(|q| {
-        let q = q.borrow();
-        !q.is_empty() && !title.to_lowercase().contains(q.as_str()) && !desc.to_lowercase().contains(q.as_str())
-    });
-    if hidden {
+    if !matches_settings_search(&[title, desc]) {
         return div();
     }
     div()
@@ -781,11 +785,7 @@ impl SettingsPage {
     fn sb_stats_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
         let s = store::settings_snapshot();
-        let hidden = QUERY.with(|q| {
-            let q = q.borrow();
-            !q.is_empty() && !t("sponsorblock stats contributions segments saved").contains(q.as_str())
-        });
-        if s.sb_user_id.trim().is_empty() || hidden {
+        if s.sb_user_id.trim().is_empty() || !matches_settings_search(&[t("sponsorblock stats contributions segments saved")]) {
             return div().into_any_element();
         }
         let stat = |value: String, label: &str| {
@@ -1188,7 +1188,7 @@ impl Render for SettingsPage {
             self.check_tools(cx);
         }
         let p = pal(cx);
-        let query = self.search.read(cx).value().trim().to_lowercase();
+        let query = settings_search_text(self.search.read(cx).value().trim());
         QUERY.with(|q| *q.borrow_mut() = query.clone());
         let mut nav = div().flex().flex_col().gap_1().w(px(240.)).flex_none().child(
             div()
@@ -1303,4 +1303,15 @@ fn fetch_progress(id: &'static str, f: crate::downloads::ToolFetch, cx: &App) ->
         .child(div().text_sm().text_color(p.text2).child(label))
         .child(div().h(px(4.)).w_full().rounded_full().bg(p.hover).child(div().h_full().w(relative(frac)).rounded_full().bg(p.accent)))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settings_search_text;
+
+    #[test]
+    fn settings_search_accepts_dotted_and_dotless_i() {
+        assert_eq!(settings_search_text("İzleme"), "izleme");
+        assert_eq!(settings_search_text("AYARI"), settings_search_text("ayarı"));
+    }
 }

@@ -21,6 +21,8 @@ pub enum AppLanguage {
     Kazakh,
     #[serde(rename = "de")]
     German,
+    #[serde(rename = "tr")]
+    Turkish,
     #[serde(rename = "ja")]
     Japanese,
     #[serde(rename = "zh-CN")]
@@ -35,6 +37,7 @@ impl AppLanguage {
         (Self::Azerbaijani, "Azərbaycanca"),
         (Self::German, "Deutsch"),
         (Self::French, "Français"),
+        (Self::Turkish, "Türkçe"),
         (Self::Russian, "Русский"),
         (Self::Ukrainian, "Українська"),
         (Self::Kazakh, "Қазақша"),
@@ -52,6 +55,7 @@ impl AppLanguage {
             Self::Ukrainian => "uk",
             Self::Kazakh => "kk",
             Self::German => "de",
+            Self::Turkish => "tr",
             Self::Japanese => "ja",
             Self::ChineseSimplified => "zh-CN",
             Self::ChineseTraditional => "zh-TW",
@@ -65,6 +69,7 @@ impl AppLanguage {
         static UK: Catalog = Catalog::new(include_str!("i18n/locales/uk.json"));
         static KK: Catalog = Catalog::new(include_str!("i18n/locales/kk.json"));
         static DE: Catalog = Catalog::new(include_str!("i18n/locales/de.json"));
+        static TR: Catalog = Catalog::new(include_str!("i18n/locales/tr.json"));
         static JA: Catalog = Catalog::new(include_str!("i18n/locales/ja.json"));
         static ZH_CN: Catalog = Catalog::new(include_str!("i18n/locales/zh-CN.json"));
         static ZH_TW: Catalog = Catalog::new(include_str!("i18n/locales/zh-TW.json"));
@@ -77,6 +82,7 @@ impl AppLanguage {
             Self::Ukrainian => &UK,
             Self::Kazakh => &KK,
             Self::German => &DE,
+            Self::Turkish => &TR,
             Self::Japanese => &JA,
             Self::ChineseSimplified => &ZH_CN,
             Self::ChineseTraditional => &ZH_TW,
