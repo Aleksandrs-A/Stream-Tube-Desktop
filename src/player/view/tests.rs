@@ -11,6 +11,7 @@ fn open_player(
 ) {
     let player = cx.update(|cx| {
         cx.set_global(Pal::new(true, 0x3ea6ff));
+        cx.set_global(crate::ui::app::UiState::default());
         controller::init(cx);
         let player = controller::player(cx);
         player.update(cx, |player, _| player.duration = 160.0);
