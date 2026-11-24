@@ -165,6 +165,99 @@ impl PlaylistPage {
         .detach();
     }
 
+    fn is_watch_later(&self) -> bool {
+        match &self.source {
+            Source::Remote(id) => id == "WL",
+            Source::Local(_) => self.protected && self.title == "Watch later",
+        }
+    }
+
+    /// Like YouTube's "Remove watched videos": drops every video in the list that is in
+    /// the watch history (the same "watched" as the feeds' Hide watched).
+    fn remove_watched(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.loading_more {
+            return;
+        }
+        let authed = self.authed;
+        let first = self.continuation.take();
+        self.loading_more = first.is_some();
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            // the whole list, not only the pages loaded so far
+            let mut more = Vec::new();
+            let mut tok = first;
+            while let Some(t) = tok.take() {
+                match blocking(move || if authed { crate::api::auth::browse_continue(&t) } else { innertube::browse_continue(&t) }).await {
+                    Ok(p) => {
+                        more.extend(p.items.into_iter().filter_map(|i| match i {
+                            Item::Video(v) => Some(v),
+                            _ => None,
+                        }));
+                        tok = p.continuation;
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.loading_more = false;
+                if let Some(v) = this.videos.ready_mut() {
+                    v.extend(more);
+                }
+                cx.notify();
+                let watched: Vec<String> = this.videos.ready().map(|v| v.iter().filter(|v| is_watched(&v.id, cx)).map(|v| v.id.clone()).collect()).unwrap_or_default();
+                if watched.is_empty() {
+                    toast(cx, format!("No watched videos in {}", this.title));
+                    return;
+                }
+                let n = watched.len();
+                let body = format!("{n} watched {} will be removed from {}.", if n == 1 { "video" } else { "videos" }, this.title);
+                let page = cx.entity().downgrade();
+                confirm("Remove watched videos?", &body, "Remove", window, cx, move |_, cx| {
+                    let ids = watched.clone();
+                    let _ = page.update(cx, |this, cx| this.do_remove_watched(ids, cx));
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn do_remove_watched(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        let n = ids.len();
+        let done = format!("Removed {n} watched {}", if n == 1 { "video" } else { "videos" });
+        match &self.source {
+            Source::Local(lid) => {
+                for id in &ids {
+                    store::playlist_remove(*lid, id);
+                }
+                self.reload_local();
+                toast(cx, done);
+                cx.notify();
+            }
+            Source::Remote(pid) => {
+                let pid = pid.clone();
+                cx.spawn(async move |this, cx| {
+                    let ids2 = ids.clone();
+                    let res = blocking(move || crate::api::auth::remove_many_from_playlist(&pid, &ids2)).await;
+                    let _ = this.update(cx, |this, cx| {
+                        match res {
+                            Ok(()) => {
+                                if let Some(v) = this.videos.ready_mut() {
+                                    v.retain(|v| !ids.contains(&v.id));
+                                }
+                                // the whole list is loaded now, so its length is the count
+                                this.count_text = None;
+                                toast(cx, done);
+                            }
+                            Err(_) => toast(cx, "Couldn't remove the watched videos on your YouTube account"),
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+        }
+    }
+
     fn playlist_param(&self) -> String {
         match &self.source {
             Source::Remote(id) => id.clone(),
@@ -267,6 +360,9 @@ impl Render for PlaylistPage {
                                 cx.refresh_windows();
                             }),
                         )
+                    })
+                    .when(self.is_watch_later(), |d| {
+                        d.child(pill("pl-rm-watched", Some("list-x"), "Remove watched", cx).on_click(cx.listener(|this, _, window, cx| this.remove_watched(window, cx))))
                     })
                     .when_some(local_id.filter(|_| !self.protected), |d, id| {
                         d.child(icon_button("pl-rename", "pencil", cx).bg(p.chip).on_click(cx.listener(move |_, _, window, cx| {
