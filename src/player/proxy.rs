@@ -219,12 +219,15 @@ pub(super) fn select_master(text: &str, max_height: u32, audio_name: Option<&str
 
 /// Rewrites one playlist so all its URLs point back at the proxy. Whether a
 /// URI is another playlist or media is decided by the tag it belongs to.
-fn rewrite_playlist(p: &Proxy, text: &str, max_height: u32) -> String {
+fn rewrite_playlist(p: &Proxy, base: &str, text: &str, max_height: u32) -> String {
     let local = |u: &str, playlist: bool| -> String {
+        let Some(url) = playlist_url(base, u) else {
+            return format!("{}/invalid", p.base());
+        };
         if playlist {
-            format!("{}/h/{}?max=0", p.base(), register(p, u, None, HLS))
+            format!("{}/h/{}?max=0", p.base(), register(p, &url, None, HLS))
         } else {
-            format!("{}/p/{}", p.base(), register(p, u, None, PASS))
+            format!("{}/p/{}", p.base(), register(p, &url, None, PASS))
         }
     };
     let lines: Vec<&str> = text.lines().collect();
@@ -280,6 +283,14 @@ fn rewrite_playlist(p: &Proxy, text: &str, max_height: u32) -> String {
     out
 }
 
+pub(super) fn playlist_url(base: &str, uri: &str) -> Option<String> {
+    if uri.starts_with("https://") || uri.starts_with("http://") {
+        return Some(uri.to_owned());
+    }
+    let resolved = url::Url::parse(base).ok()?.join(uri).ok()?;
+    matches!(resolved.scheme(), "https" | "http").then(|| resolved.into())
+}
+
 fn serve_playlist(conn: &mut TcpStream, p: &Proxy, url: &str, max_height: u32, audio: Option<&str>) -> std::io::Result<()> {
     let cached = super::shorts_preload::cached(url);
     let mut text = cached.and_then(|media| std::str::from_utf8(&media.bytes).ok().map(str::to_owned));
@@ -300,7 +311,7 @@ fn serve_playlist(conn: &mut TcpStream, p: &Proxy, url: &str, max_height: u32, a
         return Ok(());
     };
     let selected = text.contains("#EXT-X-STREAM-INF").then(|| select_master(&text, max_height, audio)).flatten();
-    let body = rewrite_playlist(p, selected.as_deref().unwrap_or(&text), max_height);
+    let body = rewrite_playlist(p, url, selected.as_deref().unwrap_or(&text), max_height);
     let head = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
@@ -325,6 +336,7 @@ fn serve_pass(conn: &mut TcpStream, url: &str, range: Option<(u64, Option<u64>)>
             write!(conn, "Content-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", media.mime, end - start + 1)?;
             if !head_only {
                 conn.write_all(&media.bytes[start as usize..=end as usize])?;
+                media.record_served(end - start + 1);
             }
             return conn.flush();
         }
@@ -487,6 +499,7 @@ fn serve(mut conn: TcpStream) -> std::io::Result<()> {
     if let Some(media) = cached.filter(|media| media.total == total && start < media.bytes.len() as u64) {
         let stop = (end + 1).min(media.bytes.len() as u64);
         conn.write_all(&media.bytes[start as usize..stop as usize])?;
+        media.record_served(stop - start);
         pos = stop;
     }
     let mut first = true;

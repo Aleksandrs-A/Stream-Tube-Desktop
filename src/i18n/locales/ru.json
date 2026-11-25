@@ -389,6 +389,7 @@
   "Buffer health": "Запас буфера",
   "Connection speed": "Скорость соединения",
   "Buffered data": "Данные в буфере",
+  "Read from Shorts preload": "Прочитано из предзагрузки Shorts",
   "Volume": "Громкость",
   "Speed": "Скорость",
   "A/V sync": "Синхронизация звука и видео",

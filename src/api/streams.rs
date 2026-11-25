@@ -1043,6 +1043,31 @@ pub fn pick_formats<'a>(
     (video, audio)
 }
 
+pub enum PlaybackStream<'a> {
+    Hls(&'a str),
+    Muxed(&'a StreamFormat),
+    Adaptive(Option<&'a StreamFormat>, Option<&'a StreamFormat>),
+}
+
+/// Pick the same media for background preloading and for the subsequent loadfile.
+pub fn playback_stream<'a>(
+    info: &'a StreamInfo,
+    quality: u32,
+    codec: &str,
+    language: Option<&str>,
+    audio_only: bool,
+) -> Option<PlaybackStream<'a>> {
+    if info.hls_only || info.is_live || (info.video.is_empty() && info.muxed.is_empty()) {
+        return info.hls_url.as_deref().map(PlaybackStream::Hls);
+    }
+    let (video, audio) = pick_formats(info, quality, codec, language);
+    let video = video.filter(|_| !audio_only);
+    if video.is_none() && audio.is_none() {
+        return info.muxed.last().map(PlaybackStream::Muxed);
+    }
+    Some(PlaybackStream::Adaptive(video, audio))
+}
+
 /// Builds a URL mpv can play: EDL combining separate video & audio streams.
 pub fn mpv_source(video: Option<&StreamFormat>, audio: Option<&StreamFormat>, duration: u64) -> Option<String> {
     let _ = duration;

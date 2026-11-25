@@ -389,6 +389,7 @@
   "Buffer health": "Durée du tampon",
   "Connection speed": "Vitesse de connexion",
   "Buffered data": "Données en mémoire tampon",
+  "Read from Shorts preload": "Données lues depuis le préchargement des Shorts",
   "Volume": "Volume",
   "Speed": "Vitesse",
   "A/V sync": "Synchronisation audio et vidéo",

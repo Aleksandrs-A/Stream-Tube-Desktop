@@ -389,6 +389,7 @@
   "Buffer health": "緩衝時間",
   "Connection speed": "連線速度",
   "Buffered data": "緩衝資料",
+  "Read from Shorts preload": "從 Shorts 預先載入中讀取的資料",
   "Volume": "音量",
   "Speed": "速度",
   "A/V sync": "音訊與視訊同步",

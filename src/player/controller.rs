@@ -41,7 +41,8 @@ pub struct Player {
     pub paused: bool,
     pub buffering: bool,
     pub seeking: bool,
-    pub cache_time: f64,
+    cache_time: f64,
+    preloaded_until: f64,
     pub volume: f64,
     pub muted: bool,
     pub speed: f64,
@@ -131,6 +132,7 @@ impl Player {
             buffering: false,
             seeking: false,
             cache_time: 0.0,
+            preloaded_until: 0.0,
             volume: s.volume,
             muted: false,
             speed: s.default_speed,
@@ -315,6 +317,9 @@ impl Player {
                 }
             }
             MpvEvent::FileLoaded => {
+                if self.video.as_ref().is_some_and(|v| v.is_short) {
+                    self.cache_time = 0.0;
+                }
                 self.loading = false;
                 self.eof = false;
                 self.apply_caption();
@@ -542,6 +547,7 @@ impl Player {
 
     pub fn play(&mut self, video: VideoItem, start: Option<f64>, cx: &mut Context<Self>) {
         self.keyboard_feedback = None;
+        self.preloaded_until = 0.0;
         self.set_playback_ready(false, cx);
         self.save_progress(true);
         if let Some(prev) = &self.video {
@@ -693,6 +699,7 @@ impl Player {
 
     /// The built-in streams failed to open: fetch them again through yt-dlp.
     fn fallback_to_ytdlp(&mut self, cx: &mut Context<Self>) {
+        self.preloaded_until = 0.0;
         self.fallback_tried = true;
         let Some(id) = self.video.as_ref().map(|v| v.id.clone()) else { return };
         streams::invalidate(&id);
@@ -725,28 +732,50 @@ impl Player {
 
     /// (Re)loads current streams into mpv with current quality/audio settings.
     fn load_current(&mut self, start: Option<f64>, keep_pause: bool, cx: &mut Context<Self>) {
+        self.preloaded_until = 0.0;
         self.set_playback_ready(false, cx);
         let (Some(mpv), Some(info)) = (self.mpv.clone(), self.streams.clone()) else { return };
         let s = store::settings_snapshot();
-        let src = if info.hls_only {
-            let audio = streams::hls_audio_choice(&info, self.audio_track.as_deref());
-            info.hls_url.as_deref().map(|u| crate::player::proxy::local_hls(u, self.quality, audio.as_deref()))
-        } else if info.is_live || (info.video.is_empty() && info.muxed.is_empty()) {
-            let use_local = crate::store::proxy_setting().is_some_and(|p| !crate::store::mpv_http_proxy(&p));
-            if use_local {
+        let is_short = self.video.as_ref().is_some_and(|v| v.is_short) && !info.is_live;
+        let selection = streams::playback_stream(
+            &info,
+            self.quality,
+            &s.codec_pref,
+            self.audio_track.as_deref(),
+            self.audio_only,
+        );
+        let mut opening = 0.0;
+        let src = match selection {
+            Some(streams::PlaybackStream::Hls(url)) if info.hls_only || is_short => {
                 let audio = streams::hls_audio_choice(&info, self.audio_track.as_deref());
-                info.hls_url.as_deref().map(|u| crate::player::proxy::local_hls(u, self.quality, audio.as_deref()))
-            } else {
-                info.hls_url.clone()
+                let source = super::proxy::local_hls(url, self.quality, audio.as_deref());
+                if is_short && source != url && start.unwrap_or(0.0) == 0.0 {
+                    opening = super::shorts_preload::hls_opening_seconds(
+                        url,
+                        self.quality,
+                        audio.as_deref(),
+                    )
+                    .unwrap_or(0.0);
+                }
+                Some(source)
             }
-        } else {
-            let (v, a) = streams::pick_formats(&info, self.quality, &s.codec_pref, self.audio_track.as_deref());
-            let v = if self.audio_only { None } else { v };
-            if v.is_none() && a.is_none() {
-                info.muxed.last().map(|m| m.url.clone())
-            } else {
+            Some(streams::PlaybackStream::Hls(url)) => {
+                // libmpv only speaks HTTP proxies: with a SOCKS proxy, live HLS goes through the local proxy
+                if crate::store::proxy_setting().is_some_and(|p| !crate::store::mpv_http_proxy(&p)) {
+                    let audio = streams::hls_audio_choice(&info, self.audio_track.as_deref());
+                    Some(super::proxy::local_hls(url, self.quality, audio.as_deref()))
+                } else {
+                    Some(url.to_owned())
+                }
+            }
+            Some(streams::PlaybackStream::Muxed(m)) if is_short => {
+                Some(super::proxy::local_url(&m.url, m.content_length, &m.mime))
+            }
+            Some(streams::PlaybackStream::Muxed(m)) => Some(m.url.clone()),
+            Some(streams::PlaybackStream::Adaptive(v, a)) => {
                 streams::mpv_source(v, a, info.length_secs)
             }
+            None => None,
         };
         let Some(src) = src else {
             self.error = Some(translate("No playable stream found").into());
@@ -779,8 +808,17 @@ impl Player {
         if let Err(e) = res {
             self.loading = false;
             self.error = Some(e.to_string());
+        } else {
+            self.preloaded_until = opening;
         }
         cx.notify();
+    }
+
+    pub fn buffered_until(&self) -> f64 {
+        if self.loading && self.video.as_ref().is_some_and(|v| v.is_short) {
+            return self.preloaded_until;
+        }
+        self.cache_time.max(self.preloaded_until)
     }
 
     /// Applies caption styling settings to mpv (see [`caption_font`] and [`mpv_color`]).
@@ -975,6 +1013,13 @@ impl Player {
         if let Some(v) = &self.video {
             let source = self.streams.as_ref().map(|s| s.source).unwrap_or("");
             out.push(("Video ID", if source.is_empty() { v.id.clone() } else { tf!("{0}, via {1}", v.id, source) }));
+            if v.is_short {
+                let bytes = super::shorts_preload::served_bytes(&v.id);
+                out.push((
+                    "Read from Shorts preload",
+                    tf!("{0} MB", format_args!("{:.2}", bytes as f64 / 1048576.0)),
+                ));
+            }
         }
         if !self.audio_only {
             let (w, h) = (f("video-params/w").unwrap_or(0.0), f("video-params/h").unwrap_or(0.0));
@@ -1047,6 +1092,7 @@ impl Player {
     }
 
     pub fn seek_to(&mut self, t: f64) {
+        self.preloaded_until = 0.0;
         let t = if self.duration > 0.0 { t.clamp(0.0, (self.duration - 0.1).max(0.0)) } else { t.max(0.0) };
         self.time = t;
         if let Some(m) = &self.mpv {
@@ -1163,6 +1209,7 @@ impl Player {
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.keyboard_feedback = None;
+        self.preloaded_until = 0.0;
         self.set_playback_ready(false, cx);
         self.save_progress(true);
         if let Some(v) = &self.video {

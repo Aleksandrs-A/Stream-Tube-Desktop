@@ -389,6 +389,7 @@
   "Buffer health": "Буфер ұзақтығы",
   "Connection speed": "Байланыс жылдамдығы",
   "Buffered data": "Буферленген деректер",
+  "Read from Shorts preload": "Shorts алдын ала жүктеуінен оқылған деректер",
   "Volume": "Дыбыс деңгейі",
   "Speed": "Жылдамдығы",
   "A/V sync": "Дыбыс пен бейнені синхрондау",
