@@ -521,7 +521,9 @@ fn db() -> &'static Mutex<Connection> {
     static DB: OnceLock<Mutex<Connection>> = OnceLock::new();
     DB.get_or_init(|| {
         let conn = open_checked(&data_dir().join("streamtube.db"));
-        conn.execute_batch(&format!("PRAGMA journal_mode=WAL; {TABLES}"))
+        // WAL mode is crash-safe with synchronous=NORMAL and avoids an fsync
+        // on every 5-second playback progress save.
+        conn.execute_batch(&format!("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; {TABLES}"))
         .expect("init db");
         // built-in playlists
         let n: i64 = conn
@@ -1131,7 +1133,13 @@ mod progress_queue_tests {
             history_progress_queued(&v.id, i as f64, 100.0, false);
         }
         history_progress_queued(&v.id, 77.0, 100.0, true);
-        let got = history_list("", 500).into_iter().find(|h| h.video.id == v.id).map(|h| h.progress);
-        assert_eq!(got, Some(77.0));
+        // `wait` gives up after 5 s so shutdown can't hang; on a busy CI runner other
+        // tests can hold the database longer than that, so give the worker more time here
+        let read = || history_list("", 500).into_iter().find(|h| h.video.id == v.id).map(|h| h.progress);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while read() != Some(77.0) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert_eq!(read(), Some(77.0));
     }
 }

@@ -4,7 +4,7 @@ use crate::i18n::{t, tf};
 use super::*;
 use crate::api::innertube;
 use crate::api::types::VideoItem;
-use crate::player::controller::{Player, player};
+use crate::player::controller::{KeyboardFeedback, Player, player};
 use crate::player::view::PlayerView;
 use crate::store;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -57,6 +57,8 @@ impl Route {
 pub struct UiState {
     #[cfg(not(target_os = "macos"))]
     fullscreen: bool,
+    /// the Shorts page is showing
+    pub shorts: bool,
     /// fullscreen layout inside the window, without OS fullscreen
     pub windowed: bool,
     pub sidebar_open: bool,
@@ -69,6 +71,62 @@ const COLLAPSED_SIDEBAR_WIDTH: f32 = 88.0;
 
 pub struct AppHandle(pub WeakEntity<AppView>);
 impl Global for AppHandle {}
+
+fn shortcut_key(key: &str) -> &str {
+    // Match the US key positions when the platform reports Russian characters.
+    match key {
+        "ф" | "Ф" => "a",
+        "и" | "И" => "b",
+        "с" | "С" => "c",
+        "в" | "В" => "d",
+        "у" | "У" => "e",
+        "а" | "А" => "f",
+        "п" | "П" => "g",
+        "р" | "Р" => "h",
+        "ш" | "Ш" => "i",
+        "о" | "О" => "j",
+        "л" | "Л" => "k",
+        "д" | "Д" => "l",
+        "ь" | "Ь" => "m",
+        "т" | "Т" => "n",
+        "щ" | "Щ" => "o",
+        "з" | "З" => "p",
+        "й" | "Й" => "q",
+        "к" | "К" => "r",
+        "ы" | "Ы" => "s",
+        "е" | "Е" => "t",
+        "г" | "Г" => "u",
+        "м" | "М" => "v",
+        "ц" | "Ц" => "w",
+        "ч" | "Ч" => "x",
+        "н" | "Н" => "y",
+        "я" | "Я" => "z",
+        "б" => ",",
+        "Б" => "<",
+        "ю" => ".",
+        "Ю" => ">",
+        "э" => "'",
+        "Э" => "\"",
+        _ => key,
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::shortcut_key;
+
+    #[::core::prelude::v1::test]
+    fn accepts_russian_shortcut_keys() {
+        assert_eq!(shortcut_key("л"), "k");
+        assert_eq!(shortcut_key("Ш"), "i");
+        assert_eq!(shortcut_key("е"), "t");
+        assert_eq!(shortcut_key("б"), ",");
+        assert_eq!(shortcut_key("Ю"), ">");
+        assert_eq!(shortcut_key("э"), "'");
+        assert_eq!(shortcut_key("left"), "left");
+        assert_eq!(shortcut_key("m"), "m");
+    }
+}
 
 /// The page a YouTube (or `streamtube:`) link opens, if it's one we understand.
 pub fn route_from_link(arg: &str) -> Option<Route> {
@@ -1812,7 +1870,7 @@ impl AppView {
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let search_focused = self.search.read(cx).focus_handle(cx).is_focused(window);
         let dialog_focused = self.dialog_input.read(cx).focus_handle(cx).is_focused(window);
-        let k = ev.keystroke.key.as_str();
+        let k = shortcut_key(&ev.keystroke.key);
         let m = &ev.keystroke.modifiers;
         let primary = if cfg!(target_os = "macos") { m.platform } else { m.control };
         if k == "f5" || (primary && k == "r" && !search_focused && !dialog_focused) {
@@ -1926,7 +1984,7 @@ impl AppView {
         if matches!(self.route, Route::Shorts(_)) {
             if let Some(page) = self.page.clone().downcast::<shorts::ShortsPage>().ok() {
                 if k == "down" || k == "up" {
-                    page.update(cx, |s, cx| s.step(if k == "down" { 1 } else { -1 }, window, cx));
+                    page.update(cx, |s, cx| s.step(if k == "down" { 1 } else { -1 }, cx));
                     return;
                 }
             }
@@ -1950,12 +2008,16 @@ impl AppView {
             return;
         }
         let step = store::settings_snapshot().seek_step;
+        let playback_key = match ev.keystroke.key_char.as_deref() {
+            Some(key @ ("-" | "+" | "<" | ">")) => key,
+            _ => k,
+        };
         let held = ev.is_held;
         if k == "space" {
             self.space_down = true;
         }
         let handled = p.update(cx, |pl: &mut Player, cx| {
-            let handled = match (k, m.shift) {
+            let handled = match (playback_key, m.shift) {
                 ("space", _) => {
                     // acted on at release (tap) or while held (2x)
                     if held {
@@ -1981,22 +2043,16 @@ impl AppView {
                     pl.seek_by(10.0);
                     true
                 }
-                ("left", _) => {
-                    pl.seek_by(-step);
+                ("left" | "right", _) => {
+                    let before = pl.time;
+                    pl.seek_by(if k == "left" { -step } else { step });
+                    pl.show_keyboard_feedback(KeyboardFeedback::Seek(pl.time - before), cx);
                     true
                 }
-                ("right", _) => {
-                    pl.seek_by(step);
-                    true
-                }
-                ("up", _) => {
-                    let v = pl.volume;
-                    pl.set_volume(v + 5.0);
-                    true
-                }
-                ("down", _) => {
-                    let v = pl.volume;
-                    pl.set_volume(v - 5.0);
+                ("up" | "down", _) => {
+                    let delta = if k == "up" { 5.0 } else { -5.0 };
+                    pl.set_volume(pl.volume + delta);
+                    pl.show_keyboard_feedback(KeyboardFeedback::Volume(pl.volume), cx);
                     true
                 }
                 ("m", false) => {
@@ -2015,16 +2071,9 @@ impl AppView {
                     pl.frame_step(true);
                     true
                 }
-                (",", true) | ("<", _) => {
-                    let s = pl.speed;
-                    pl.set_speed(s - 0.25);
-                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", (s - 0.25).max(0.25))));
-                    true
-                }
-                (".", true) | (">", _) => {
-                    let s = pl.speed;
-                    pl.set_speed(s + 0.25);
-                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", s + 0.25)));
+                ("," | "." | "=", true) | ("<" | ">" | "-" | "+", _) => {
+                    pl.step_speed(matches!(playback_key, "." | "=" | ">" | "+"));
+                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", pl.speed)));
                     true
                 }
                 ("home", _) => {
@@ -3122,9 +3171,11 @@ impl Render for AppView {
             window.set_rem_size(px(16.0 * scale));
         }
         let is_watch = matches!(self.route, Route::Watch { .. });
-        cx.global_mut::<UiState>().viewport = window.viewport_size();
         let is_shorts = matches!(self.route, Route::Shorts(_));
         let fullscreen = (is_watch || is_shorts) && is_fullscreen(window, cx);
+        let ui = cx.global_mut::<UiState>();
+        ui.viewport = window.viewport_size();
+        ui.shorts = is_shorts;
         let mut root = div()
             .image_cache(self.images.clone())
             .id("app-root")
@@ -3367,21 +3418,58 @@ fn build_page(route: &Route, window: &mut Window, cx: &mut App) -> AnyView {
     }
 }
 
-/// Shows a file selected in the system file manager.
+/// Shows a download in the system file manager.
 pub fn reveal_in_folder(path: &str, cx: &mut App) {
-    if !std::path::Path::new(path).exists() {
+    let path = std::path::Path::new(path);
+    if !path.exists() {
         toast(cx, t("File not found (moved or deleted)"));
+        return;
+    }
+    if path.is_dir() {
+        let _ = open::that(path);
         return;
     }
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn();
+        // SHOpenFolderAndSelectItems can block and run its own message loop (it shows
+        // an error dialog when Explorer can't open the folder). That must not happen on
+        // GPUI's thread, so it runs on its own thread with its own COM apartment.
+        let path = path.to_path_buf();
+        let _ = std::thread::Builder::new().name("reveal-in-folder".into()).spawn(move || {
+            if !select_in_explorer(&path) {
+                if let Some(folder) = path.parent() {
+                    let _ = open::that(folder);
+                }
+            }
+        });
     }
     #[cfg(not(windows))]
-    {
-        if let Some(d) = std::path::Path::new(path).parent() {
-            let _ = open::that(d);
+    if let Some(folder) = path.parent() {
+        let _ = open::that(folder);
+    }
+}
+
+#[cfg(windows)]
+fn select_in_explorer(path: &std::path::Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+    use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+    use windows::core::PCWSTR;
+
+    let Ok(path) = std::path::absolute(path) else { return false };
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    unsafe {
+        let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let item = ILCreateFromPathW(PCWSTR(wide.as_ptr()));
+        let ok = !item.is_null() && {
+            let result = SHOpenFolderAndSelectItems(item, None, 0);
+            ILFree(Some(item));
+            result.is_ok()
+        };
+        if com {
+            CoUninitialize();
         }
+        ok
     }
 }
 
