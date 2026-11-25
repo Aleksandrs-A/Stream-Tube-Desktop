@@ -16,6 +16,8 @@ pub struct ShortsPage {
     list: Vec<VideoItem>,
     idx: usize,
     loading: bool,
+    initial_play: bool,
+    next_meta: Option<String>,
     votes: HashMap<String, services::Votes>,
     last_step: Instant,
     /// wheel / touchpad gesture tracking: one Short per gesture
@@ -41,6 +43,9 @@ pub struct ShortsPage {
 impl ShortsPage {
     pub fn new(start: Option<String>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sub = cx.subscribe(&player(cx), |this: &mut Self, _, ev: &crate::player::controller::PlayerEvent, cx| {
+            if matches!(ev, crate::player::controller::PlayerEvent::PlaybackReadyChanged) {
+                cx.notify();
+            }
             if matches!(ev, crate::player::controller::PlayerEvent::Ended) && store::settings_snapshot().shorts_autoadvance {
                 this.advance(cx);
             }
@@ -54,6 +59,8 @@ impl ShortsPage {
             list: Vec::new(),
             idx: 0,
             loading: true,
+            initial_play: true,
+            next_meta: None,
             votes: HashMap::new(),
             last_step: Instant::now(),
             wheel_acc: 0.0,
@@ -80,18 +87,15 @@ impl ShortsPage {
                 _ => VideoItem { id: id.clone(), is_short: true, thumbnail: innertube::default_thumb(id), ..Default::default() },
             };
             s.list.push(item);
-            s.play_current(cx);
             Some(id.clone())
         } else if let Some(mut v) = cur_playing.filter(|v| v.is_short) {
             let id = v.id.clone();
             v.is_short = true;
             s.list.push(v);
-            s.play_current(cx);
             Some(id)
         } else {
             None
         };
-        let had_initial = initial_id.is_some();
         cx.spawn(async move |this, cx| {
             let res = blocking(move || {
                 // YouTube's own Shorts sequence: follow on from the opened/playing Short when present,
@@ -133,9 +137,7 @@ impl ShortsPage {
                 }
                 this.continuation = res.1;
                 this.reel_feed = res.2;
-                if !had_initial && !this.list.is_empty() {
-                    this.play_current(cx);
-                }
+
                 cx.notify();
             });
         })
@@ -144,6 +146,7 @@ impl ShortsPage {
     }
 
     fn play_current(&mut self, cx: &mut Context<Self>) {
+        self.initial_play = false;
         let Some(mut v) = self.list.get(self.idx).cloned() else { return };
         v.is_short = true;
         let pl = player(cx);
@@ -161,9 +164,6 @@ impl ShortsPage {
             }
         });
         self.fetch_meta(v.id.clone(), cx);
-        if let Some(n) = self.list.get(self.idx + 1) {
-            self.fetch_meta(n.id.clone(), cx);
-        }
         if self.show_comments {
             self.open_comments(cx);
         }
@@ -180,7 +180,11 @@ impl ShortsPage {
             })
             .detach();
         }
-        // prefetch more when near the end
+        self.load_more_if_needed(cx);
+        cx.notify();
+    }
+
+    fn load_more_if_needed(&mut self, cx: &mut Context<Self>) {
         if self.idx + 3 >= self.list.len() {
             if let Some(tok) = self.continuation.take() {
                 let reel = self.reel_feed;
@@ -209,8 +213,9 @@ impl ShortsPage {
                     if let Ok((items, cont)) = res {
                         let _ = this.update(cx, |t, cx| {
                             t.continuation = cont;
+                            let settings = store::settings_snapshot();
                             for v in items {
-                                if !t.list.iter().any(|x| x.id == v.id) {
+                                if !t.list.iter().any(|x| x.id == v.id) && !store::is_filtered(&VideoItem { is_short: false, ..v.clone() }, &settings) {
                                     t.list.push(v);
                                 }
                             }
@@ -221,7 +226,6 @@ impl ShortsPage {
                 .detach();
             }
         }
-        cx.notify();
     }
 
     fn fetch_meta(&mut self, id: String, cx: &mut Context<Self>) {
@@ -619,15 +623,33 @@ impl ShortsPage {
 }
 
 impl Render for ShortsPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = pal(cx);
         let ui = *cx.global::<UiState>();
         let pl = player(cx);
         let playing = pl.read(cx);
-        crate::player::shorts_preload::update(&self.list[self.idx..], playing.quality, playing.audio_only);
+        let ready = playing.playback_ready && self.list.get(self.idx).zip(playing.video.as_ref()).is_some_and(|(short, video)| short.id == video.id);
+        crate::player::shorts_preload::update(&self.list[self.idx..], playing.quality, playing.audio_only, ready);
+        if self.initial_play && !self.list.is_empty() {
+            // Let the page paint before initializing mpv, including when opening a Short by URL.
+            cx.on_next_frame(window, |page, _, cx| {
+                if page.initial_play && crate::ui::app::is_current_page(cx.entity_id(), cx) {
+                    page.play_current(cx);
+                }
+            });
+        }
+        if ready {
+            if let Some(id) = self.list.get(self.idx + 1).map(|v| &v.id).filter(|id| self.next_meta.as_ref() != Some(*id)).cloned() {
+                self.next_meta = Some(id.clone());
+                self.fetch_meta(id, cx);
+            }
+        }
+        if !self.initial_play || self.list.is_empty() {
+            self.load_more_if_needed(cx);
+        }
         if self.list.is_empty() {
             crate::ui::slot::clear_slot(cx);
-            return div().size_full().child(if self.loading { spinner(cx).into_any_element() } else { empty_state("zap", "No Shorts found", "", cx).into_any_element() }).into_any_element();
+            return div().size_full().flex().items_center().justify_center().child(if self.loading { spinner(cx).into_any_element() } else { empty_state("zap", "No Shorts found", "", cx).into_any_element() }).into_any_element();
         }
         let v = self.list[self.idx].clone();
         if ui.fullscreen {
