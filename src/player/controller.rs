@@ -718,7 +718,13 @@ impl Player {
             let audio = streams::hls_audio_choice(&info, self.audio_track.as_deref());
             info.hls_url.as_deref().map(|u| crate::player::proxy::local_hls(u, self.quality, audio.as_deref()))
         } else if info.is_live || (info.video.is_empty() && info.muxed.is_empty()) {
-            info.hls_url.clone()
+            let use_local = crate::store::proxy_setting().is_some_and(|p| !crate::store::mpv_http_proxy(&p));
+            if use_local {
+                let audio = streams::hls_audio_choice(&info, self.audio_track.as_deref());
+                info.hls_url.as_deref().map(|u| crate::player::proxy::local_hls(u, self.quality, audio.as_deref()))
+            } else {
+                info.hls_url.clone()
+            }
         } else {
             let (v, a) = streams::pick_formats(&info, self.quality, &s.codec_pref, self.audio_track.as_deref());
             let v = if self.audio_only { None } else { v };
@@ -824,7 +830,12 @@ impl Player {
         let (Some(mpv), Some(info)) = (&self.mpv, &self.streams) else { return };
         let _ = mpv.command(&["sub-remove"]);
         if let Some(c) = self.caption.and_then(|i| info.captions.get(i)) {
-            let _ = mpv.command(&["sub-add", &c.url, "select", &c.name, &c.lang]);
+            let url = if crate::store::proxy_setting().is_some() {
+                crate::player::proxy::local_pass(&c.url)
+            } else {
+                c.url.clone()
+            };
+            let _ = mpv.command(&["sub-add", &url, "select", &c.name, &c.lang]);
         } else {
             mpv.set("sid", "no");
         }

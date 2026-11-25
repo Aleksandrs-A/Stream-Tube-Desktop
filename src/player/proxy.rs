@@ -113,6 +113,17 @@ pub fn local_hls(url: &str, max_height: u32, audio: Option<&str>) -> String {
     }
 }
 
+/// Serves a single HTTP(S) resource (such as a caption track) through the
+/// authenticated local proxy so mpv uses the app's configured SOCKS/HTTP proxy.
+pub fn local_pass(url: &str) -> String {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return url.to_string();
+    }
+    let Some(p) = proxy() else { return url.to_string() };
+    let id = register(p, url, None, PASS);
+    format!("{}/p/{id}", p.base())
+}
+
 pub(super) fn hls_attr(line: &str, key: &str) -> Option<String> {
     // match KEY= at an attribute boundary (so AUDIO= doesn't hit "VIDEO-RANGE=..."-like names)
     let mut search = line;
@@ -553,6 +564,17 @@ mod token_tests {
         assert_eq!(super::strip_token("/0123abce/s/5", t), None);
         assert_eq!(super::strip_token("/0123abcds/5", t), None);
         assert_eq!(super::strip_token("/01", t), None);
+    }
+
+    #[test]
+    fn local_pass_proxies_only_http_urls_with_secret() {
+        assert_eq!(super::local_pass("/tmp/local.vtt"), "/tmp/local.vtt");
+        let proxied = super::local_pass("https://www.youtube.com/api/timedtext?v=abc");
+        let rest = proxied.strip_prefix("http://127.0.0.1:").expect("loopback url");
+        let path = rest.split_once('/').expect("path").1;
+        let (token, tail) = path.split_once('/').expect("token prefix");
+        assert_eq!(token.len(), 48, "48-hex-char session secret");
+        assert!(tail.starts_with("p/"), "pass route: {tail}");
     }
 }
 
