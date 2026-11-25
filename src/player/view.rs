@@ -115,6 +115,12 @@ impl PlayerView {
             cx.background_executor().timer(hide + Duration::from_millis(100)).await;
             let _ = this.update(cx, |v, cx| {
                 if v.show_until == until {
+                    // the pointer goes with the controls while it's over the video,
+                    // and comes back with them when the mouse moves
+                    let paused = v.player.read(cx).paused;
+                    if v.hovering && !v.mini && !v.controls_visible(paused) {
+                        hide_pointer_until_moved();
+                    }
                     cx.notify();
                 }
             });
@@ -140,6 +146,21 @@ impl PlayerView {
             self.player.update(cx, |p, _| p.end_boost());
             cx.notify();
         }
+    }
+}
+
+/// Hides the mouse pointer until it moves again. GPUI has no public call for
+/// this, so it's per platform; Linux keeps the pointer for now.
+fn hide_pointer_until_moved() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        let _: () = objc2::msg_send![objc2::class!(NSCursor), setHiddenUntilMouseMoves: true];
+    }
+    // GPUI's Windows backend sets the pointer again on the next WM_SETCURSOR,
+    // which comes with the next mouse move (its own keyboard hide works the same way)
+    #[cfg(target_os = "windows")]
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::SetCursor(None);
     }
 }
 
