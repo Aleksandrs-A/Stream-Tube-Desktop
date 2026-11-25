@@ -1220,9 +1220,8 @@ impl PlayerView {
                 d.child(ctl_btn("c-pip", "picture-in-picture").on_click(|_, _, cx| crate::ui::pip::open(cx)))
             })
             .when(!ui.fullscreen && !self.pip && !narrow, |d| {
-                d.child(ctl_btn("c-theater", if ui.theater { "rectangle-horizontal" } else { "rectangle-horizontal" }).on_click(|_, _, cx| {
-                    cx.global_mut::<UiState>().theater ^= true;
-                    cx.refresh_windows();
+                d.child(ctl_btn("c-theater", "rectangle-horizontal").on_click(|_, _, cx| {
+                    crate::ui::app::toggle_theater_mode(cx);
                 }))
             })
             .when(!self.pip, |d| {

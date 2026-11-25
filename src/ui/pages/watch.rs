@@ -1449,6 +1449,8 @@ impl Render for WatchPage {
         crate::perf::add(&crate::perf::PAGE_RENDERS, 1);
         let p = pal(cx);
         let ui = *cx.global::<UiState>();
+        let settings = store::settings_snapshot();
+        let theater = settings.theater_mode;
         // infinite scroll: comments, then related
         if near_bottom(&self.scroll, 600.0) {
             if let Some(Load::Ready(c)) = &self.comments {
@@ -1472,7 +1474,7 @@ impl Render for WatchPage {
         let side_w = px(402.);
         let two_col = avail > px(1000.);
         let primary_w = if two_col { (avail - side_w - px(24.)).min(px(1280.)) } else { avail };
-        let player_h = if ui.theater {
+        let player_h = if theater {
             (vp.width * (9. / 16.)).min(vp.height - px(56. + 120.))
         } else {
             primary_w * (9. / 16.)
@@ -1504,7 +1506,7 @@ impl Render for WatchPage {
             .children(queue_panel)
             .children(related);
         // ambient mode: a soft glow in the picture's colours around the player
-        let glow = (!ui.theater && store::settings_snapshot().ambient_mode)
+        let glow = (!theater && settings.ambient_mode)
             .then(|| crate::player::controller::player(cx).read(cx).ambient)
             .flatten()
             .map(|c| {
@@ -1513,16 +1515,16 @@ impl Render for WatchPage {
                 h
             });
         let player_box = div()
-            .w(if ui.theater { vp.width } else { primary_w })
+            .w(if theater { vp.width } else { primary_w })
             .h(player_h)
             .flex_none()
-            .when(!ui.theater, |d| d.rounded_xl().overflow_hidden())
+            .when(!theater, |d| d.rounded_xl().overflow_hidden())
             .when_some(glow, |d, color| {
                 d.shadow(vec![BoxShadow { color, offset: point(px(0.), px(0.)), blur_radius: px(90.), spread_radius: px(12.), inset: false }])
             })
             .child(crate::ui::slot::player_slot(cx));
 
-        let body = if ui.theater {
+        let body = if theater {
             div()
                 .flex()
                 .flex_col()
