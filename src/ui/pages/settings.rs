@@ -671,6 +671,12 @@ impl SettingsPage {
                 self.choice("q", &[(2160u32, "4K"), (1440, "1440p"), (1080, "1080p"), (720, "720p"), (480, "480p"), (360, "360p")], s.default_quality, |s, v| s.default_quality = v, cx),
                 cx,
             ))
+            .child(row(
+                "Aspect ratio",
+                "Crop the black bars of letterboxed films to fill an ultrawide screen, or zoom the picture. Z changes it while watching",
+                self.choice("aspect", &crate::player::aspect::MODES.iter().map(|&(v, l)| (v.to_string(), l)).collect::<Vec<_>>(), s.aspect_mode.clone(), |s, v| s.aspect_mode = v, cx),
+                cx,
+            ))
             .child(row("Preferred codec", "", self.choice("codec", &[("vp9".to_string(), "VP9"), ("av1".to_string(), "AV1"), ("h264".to_string(), "H.264")], s.codec_pref.clone(), |s, v| s.codec_pref = v, cx), cx))
             .child(row("Default speed", "", self.choice("speed", &[(0.75f64, "0.75x"), (1.0, "1x"), (1.25, "1.25x"), (1.5, "1.5x"), (1.75, "1.75x"), (2.0, "2x")], s.default_speed, |s, v| s.default_speed = v, cx), cx))
             .child(row("Remember speed per channel", "", switch("rsp", s.remember_speed_per_channel, |s, v| s.remember_speed_per_channel = v, cx), cx))

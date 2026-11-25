@@ -2012,6 +2012,13 @@ impl AppView {
                     pl.set_audio_only(a, cx);
                     true
                 }
+                // aspect ratio: Original, Auto, Zoom to fill, Stretch, 21:9...
+                ("z", false) => {
+                    let next = crate::player::aspect::next_mode(&store::settings_snapshot().aspect_mode);
+                    crate::player::view::set_aspect_mode(next, cx);
+                    crate::ui::toast(cx, tf!("Aspect ratio: {0}", t(crate::player::aspect::label(next))));
+                    true
+                }
                 _ => false,
             };
             cx.notify();
