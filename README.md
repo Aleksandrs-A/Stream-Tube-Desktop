@@ -61,6 +61,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Most replayed graph with "jump ahead", ambient glow around the player (on or off from the player's gear menu), force original audio instead of auto-dubbing
 - Aspect ratio controls for ultrawide screens, like the Ultrawidify extension: *Auto* finds a film's black bars and crops them away so it fills a 21:9 or 32:9 monitor, or pick 21:9, 18:9 or 32:9, *Zoom to fill* or *Stretch*. Choose it from the player's gear menu or *Settings → Player*, or press *Z* to cycle
 - A screenshot button in the player bar
+- Step one frame at a time with `,` or `.` while paused, or with Previous frame and Next frame in the player's right-click menu
 - Comments sorted by Top, Timed or Newest. *Timed* works like youtube.com: comments that mention a moment of the video appear as playback reaches it
 - Comments show animated GIFs, stickers and channel emojis, and replies are drawn as threads, with answers to a reply nested under it. Long comments and channel descriptions are shortened with *Read more* / *Show more*
 - Keyboard shortcuts for playback, seek, volume, captions, fullscreen, theater, picture-in-picture and the queue. Z changes the aspect ratio and Ctrl+←/→ changes chapters. Playback letter keys also work with the Russian layout.
