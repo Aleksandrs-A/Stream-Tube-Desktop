@@ -52,6 +52,7 @@ impl Route {
 #[derive(Clone, Copy, Default)]
 pub struct UiState {
     pub fullscreen: bool,
+    pub shorts: bool,
     /// fullscreen layout inside the window, without OS fullscreen
     pub windowed: bool,
     pub sidebar_open: bool,
@@ -3118,10 +3119,11 @@ impl Render for AppView {
         if (f32::from(window.rem_size()) - 16.0 * scale).abs() > 0.01 {
             window.set_rem_size(px(16.0 * scale));
         }
-        let ui = *cx.global::<UiState>();
         let is_watch = matches!(self.route, Route::Watch { .. });
-        cx.global_mut::<UiState>().viewport = window.viewport_size();
         let is_shorts = matches!(self.route, Route::Shorts(_));
+        let ui = cx.global_mut::<UiState>();
+        ui.viewport = window.viewport_size();
+        ui.shorts = is_shorts;
         let fullscreen = ui.fullscreen && (is_watch || is_shorts);
         let mut root = div()
             .image_cache(self.images.clone())

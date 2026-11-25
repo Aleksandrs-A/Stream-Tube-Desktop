@@ -5,8 +5,9 @@ use crate::i18n::{t as translate, tf};
 use crate::api::json::format_duration;
 use crate::api::services;
 use crate::store;
-use crate::ui::app::{Route, UiState, navigate};
-use crate::ui::{icon, pal};
+use crate::ui::app::{Route, UiState, navigate, open_menu};
+use crate::ui::cards::download_menu_items;
+use crate::ui::{icon, icon_button, pal};
 use gpui_kit::*;
 use gpui_kit::prelude::*;
 use std::cell::Cell;
@@ -550,6 +551,23 @@ impl Render for PlayerView {
 
         if mini {
             return root.child(self.render_mini_controls(show, paused, time, duration, cx)).into_any_element();
+        }
+
+        if let Some(video) = video.filter(|v| ui.shorts && !self.pip && v.is_short) {
+            root = root.child(
+                icon_button("sh-download", "download", cx)
+                    .absolute()
+                    .top_3()
+                    .right_3()
+                    .bg(p.chip)
+                    .occlude()
+                    .tooltip(|window, cx| component::tooltip::Tooltip::new(translate("Download")).build(window, cx))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |ev, window, cx| {
+                        cx.stop_propagation();
+                        open_menu(ev.position(), download_menu_items(&video), window, cx);
+                    }),
+            );
         }
 
         // SponsorBlock prompt / highlight
