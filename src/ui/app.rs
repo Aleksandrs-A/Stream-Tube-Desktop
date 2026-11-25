@@ -3417,21 +3417,58 @@ fn build_page(route: &Route, window: &mut Window, cx: &mut App) -> AnyView {
     }
 }
 
-/// Shows a file selected in the system file manager.
+/// Shows a download in the system file manager.
 pub fn reveal_in_folder(path: &str, cx: &mut App) {
-    if !std::path::Path::new(path).exists() {
+    let path = std::path::Path::new(path);
+    if !path.exists() {
         toast(cx, t("File not found (moved or deleted)"));
+        return;
+    }
+    if path.is_dir() {
+        let _ = open::that(path);
         return;
     }
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn();
+        // SHOpenFolderAndSelectItems can block and run its own message loop (it shows
+        // an error dialog when Explorer can't open the folder). That must not happen on
+        // GPUI's thread, so it runs on its own thread with its own COM apartment.
+        let path = path.to_path_buf();
+        let _ = std::thread::Builder::new().name("reveal-in-folder".into()).spawn(move || {
+            if !select_in_explorer(&path) {
+                if let Some(folder) = path.parent() {
+                    let _ = open::that(folder);
+                }
+            }
+        });
     }
     #[cfg(not(windows))]
-    {
-        if let Some(d) = std::path::Path::new(path).parent() {
-            let _ = open::that(d);
+    if let Some(folder) = path.parent() {
+        let _ = open::that(folder);
+    }
+}
+
+#[cfg(windows)]
+fn select_in_explorer(path: &std::path::Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+    use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+    use windows::core::PCWSTR;
+
+    let Ok(path) = std::path::absolute(path) else { return false };
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    unsafe {
+        let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let item = ILCreateFromPathW(PCWSTR(wide.as_ptr()));
+        let ok = !item.is_null() && {
+            let result = SHOpenFolderAndSelectItems(item, None, 0);
+            ILFree(Some(item));
+            result.is_ok()
+        };
+        if com {
+            CoUninitialize();
         }
+        ok
     }
 }
 
