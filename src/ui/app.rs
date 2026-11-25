@@ -1939,15 +1939,7 @@ impl AppView {
                     true
                 }
                 ("c", false) => {
-                    let next = if pl.caption.is_some() {
-                        None
-                    } else {
-                        let lang = store::settings_snapshot().captions_lang.clone();
-                        pl.streams.as_ref().and_then(|s| {
-                            s.captions.iter().position(|c| c.lang.starts_with(&lang)).or(if s.captions.is_empty() { None } else { Some(0) })
-                        })
-                    };
-                    pl.set_caption(next, cx);
+                    pl.toggle_captions(cx);
                     true
                 }
                 (",", false) if pl.paused => {
