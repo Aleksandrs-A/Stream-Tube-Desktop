@@ -3155,14 +3155,14 @@ impl Render for AppView {
                         |d, t| d.opacity(0.35 + 0.65 * t),
                     ),
             )
-            .when(has_slot, |d| d.child(crate::ui::slot::SlotFollower::new(cx, self.main_view.clone().into())))
+            .when(has_slot, |d| d.child(crate::ui::pip::main_surface(&self.main_view, cx)))
             // only over a thumbnail drawn on this page (the slot is cleared when a
             // preview stops or moves to another video)
             .when(
                 crate::player::preview::showing(cx).is_some() && cx.global::<crate::player::preview::PreviewSlot>().0.get().is_some(),
                 |d| {
                     let slot = cx.global::<crate::player::preview::PreviewSlot>().0.clone();
-                    d.child(crate::ui::slot::SlotFollower::with_slot(slot, self.preview_view.clone().into()))
+                    d.child(crate::ui::slot::SlotFollower::with_slot(slot, AnyView::from(self.preview_view.clone())))
                 },
             );
         if fullscreen {
