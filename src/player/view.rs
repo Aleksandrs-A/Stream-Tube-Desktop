@@ -216,7 +216,8 @@ impl Render for PlayerView {
         let view = cx.entity().downgrade();
         let aspect = aspect::Mode::parse(&store::settings_snapshot().aspect_mode);
         let auto_trim = pl.auto_crop.trim;
-        let picture = frame.clone().filter(|_| !audio_only);
+        let short_cover = video.as_ref().filter(|_| ui.shorts && !mini && !self.pip && !audio_only && (pl.loading || frame.is_none()) && error.is_none());
+        let picture = frame.clone().filter(|_| !audio_only && short_cover.is_none());
 
         // ── video surface ──
         let surface = div()
@@ -261,6 +262,9 @@ impl Render for PlayerView {
                 .absolute()
                 .size_full(),
             )
+            .when_some(short_cover, |d, v| {
+                d.child(img(SharedString::from(v.thumbnail.clone())).absolute().size_full().object_fit(ObjectFit::Cover))
+            })
             .when(audio_only, |d| {
                 d.when_some(video.as_ref().map(|v| v.thumbnail.clone()), |d, t| {
                     d.child(

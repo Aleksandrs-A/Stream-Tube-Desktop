@@ -52,6 +52,7 @@ impl Route {
 #[derive(Clone, Copy, Default)]
 pub struct UiState {
     pub fullscreen: bool,
+    /// the Shorts page is showing
     pub shorts: bool,
     /// fullscreen layout inside the window, without OS fullscreen
     pub windowed: bool,
@@ -1973,7 +1974,7 @@ impl AppView {
         if matches!(self.route, Route::Shorts(_)) {
             if let Some(page) = self.page.clone().downcast::<shorts::ShortsPage>().ok() {
                 if k == "down" || k == "up" {
-                    page.update(cx, |s, cx| s.step(if k == "down" { 1 } else { -1 }, window, cx));
+                    page.update(cx, |s, cx| s.step(if k == "down" { 1 } else { -1 }, cx));
                     return;
                 }
             }
