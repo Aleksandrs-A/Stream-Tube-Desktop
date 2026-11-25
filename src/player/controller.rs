@@ -254,7 +254,12 @@ impl Player {
                 Some(m)
             }
             Err(e) => {
-                self.init_error = Some(tf!("Could not start the video engine (libmpv): {0}", e));
+                let error = e.to_string();
+                self.init_error = Some(match error.as_str() {
+                    #[cfg(windows)]
+                    super::mpv::MISSING_WINDOWS_MPV => translate(super::mpv::MISSING_WINDOWS_MPV).to_owned(),
+                    _ => tf!("Could not start the video engine (libmpv): {0}", error),
+                });
                 None
             }
         }

@@ -710,6 +710,7 @@
   "Update failed: {0}": "更新に失敗しました: {0}",
   "Could not start the installer: {0}": "インストーラを起動できませんでした: {0}",
   "Could not start the video engine (libmpv): {0}": "動画エンジン (libmpv) を起動できませんでした:{0}",
+  "libmpv-2.dll is missing. Extract the entire Windows ZIP before opening streamtube.exe, or use the Windows installer.": "libmpv-2.dll が見つかりません。Windows 用 ZIP をすべて展開してから streamtube.exe を開くか、Windows インストーラーを使用してください。",
   "Playback error: {0}": "再生エラー（{0}）",
   "Vote failed: {0}": "投票失敗：{0}",
   "Skipped {0}": "「{0}」をスキップしました",

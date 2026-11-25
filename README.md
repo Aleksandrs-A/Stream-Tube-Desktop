@@ -164,8 +164,9 @@ This is an early alpha, so expect rough edges.
 **Windows 10/11 (64-bit)**: run `StreamTube-<version>-setup.exe`. It installs for
 your user only, so no administrator prompt, and the app updates itself when a new
 release comes out (*Settings → About*).
-To run it without installing, unzip `StreamTube-<version>-windows-x64.zip` and run
-`streamtube.exe`. It doesn't need the Visual C++ runtime.
+To run it without installing, choose *Extract All* on
+`StreamTube-<version>-windows-x64.zip`, then open `streamtube.exe` in the extracted
+folder with `libmpv-2.dll` beside it. It doesn't need the Visual C++ runtime.
 Older PCs whose graphics driver has no Vulkan support (for example Intel HD 4000)
 work too: the app carries its own Vulkan loader for libmpv and uses it only when
 Windows doesn't have one.

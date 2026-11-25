@@ -710,6 +710,7 @@
   "Update failed: {0}": "更新失败: {0}",
   "Could not start the installer: {0}": "无法启动安装程序: {0}",
   "Could not start the video engine (libmpv): {0}": "无法启动视频引擎(libmpv ) : {0}",
+  "libmpv-2.dll is missing. Extract the entire Windows ZIP before opening streamtube.exe, or use the Windows installer.": "找不到 libmpv-2.dll。请完整解压 Windows ZIP 文件后再打开 streamtube.exe，或使用 Windows 安装程序。",
   "Playback error: {0}": "播放错误（{0}）",
   "Vote failed: {0}": "投票失败: {0}",
   "Skipped {0}": "已跳过“{0}”",

@@ -710,6 +710,7 @@
   "Update failed: {0}": "Güncelleme başarısız oldu: {0}",
   "Could not start the installer: {0}": "Yükleyici başlatılamadı ({0})",
   "Could not start the video engine (libmpv): {0}": "Oynatma motoru (libmpv) başlatılamadı ({0})",
+  "libmpv-2.dll is missing. Extract the entire Windows ZIP before opening streamtube.exe, or use the Windows installer.": "libmpv-2.dll bulunamadı. streamtube.exe dosyasını açmadan önce Windows ZIP arşivinin tamamını çıkarın veya Windows yükleyicisini kullanın.",
   "Playback error: {0}": "Oynatma hatası ({0})",
   "Vote failed: {0}": "Oy gönderilemedi ({0})",
   "Skipped {0}": "Atlandı ({0})",

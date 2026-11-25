@@ -710,6 +710,7 @@
   "Update failed: {0}": "Yeniləmə bacarılmadı: {0}",
   "Could not start the installer: {0}": "Quraşdırma başlatıla bilmədi: {0}",
   "Could not start the video engine (libmpv): {0}": "Video mühərriki (libmpv) başlatıla bilmədi: {0}",
+  "libmpv-2.dll is missing. Extract the entire Windows ZIP before opening streamtube.exe, or use the Windows installer.": "libmpv-2.dll faylı tapılmadı. streamtube.exe faylını açmazdan əvvəl Windows ZIP arxivini tam çıxarın və ya Windows quraşdırıcısından istifadə edin.",
   "Playback error: {0}": "Oynatma xətası ({0})",
   "Vote failed: {0}": "Seçki bacarılmadı: {0}",
   "Skipped {0}": "«{0}» ötürüldü",
