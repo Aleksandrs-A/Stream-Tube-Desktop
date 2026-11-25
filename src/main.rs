@@ -6,6 +6,7 @@ mod perf;
 mod recommend;
 mod downloads;
 mod feed;
+mod i18n;
 mod import;
 mod links;
 mod locale;
@@ -102,6 +103,7 @@ fn main() {
     application.run(move |cx: &mut App| {
         perf::mark("gpui running");
         gpui_kit::init(cx);
+        i18n::apply_component_locale();
         perf::mark("gpui_kit init");
         player::preview::init(cx);
         perf::mark("preview init");
@@ -110,6 +112,9 @@ fn main() {
         player::controller::init(cx);
         perf::mark("player init");
         let opts = WindowOptions {
+            // Without this the Wayland/X11 window has no identity, so docks and
+            // taskbars can't match it to streamtube.desktop (StartupWMClass).
+            app_id: Some("streamtube".into()),
             window_bounds: Some(saved_window_bounds(cx)),
             titlebar: Some(TitlebarOptions {
                 title: Some("Stream Tube".into()),
