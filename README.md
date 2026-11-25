@@ -173,21 +173,21 @@ Windows doesn't have one.
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.7.3-alpha_amd64.deb
+sudo apt install ./streamtube_0.7.4-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.7.3-alpha.x86_64.rpm
+sudo dnf install ./streamtube-0.7.4-alpha.x86_64.rpm
 ```
 
 **Any Linux (x86_64), nothing to install**: download the AppImage, make it executable
 and run it. libmpv is inside, so video plays without installing anything else:
 
 ```sh
-chmod +x StreamTube-0.7.3-alpha-x86_64.AppImage
-./StreamTube-0.7.3-alpha-x86_64.AppImage
+chmod +x StreamTube-0.7.4-alpha-x86_64.AppImage
+./StreamTube-0.7.4-alpha-x86_64.AppImage
 ```
 
 **Other Linux (x86_64), installed for your user**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
@@ -222,11 +222,11 @@ and each file has a signed build provenance attestation that ties it to the work
 run that built it. With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify StreamTube-0.7.3-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
+gh attestation verify StreamTube-0.7.4-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
 ```
 
-Releases are immutable once published, so their files can't be swapped afterwards.
-The in-app updater also checks the installer's SHA-256 before running it.
+Check a download against those before running it. The in-app updater also checks
+the installer's SHA-256 before running it.
 
 ## Building
 
@@ -254,7 +254,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.7.3-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.7.4-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in
@@ -303,6 +303,9 @@ Stream Tube leans on a lot of other people's work:
 [Return YouTube Dislike](https://returnyoutubedislike.com),
 [GPUI](https://www.gpui.rs), [FFmpeg](https://ffmpeg.org) and the annotation archive saved by
 [Archive Team](https://wiki.archiveteam.org/index.php/YouTube/Annotations).
+
+Thanks also to everyone who has sent fixes and features; each release's notes name
+who did what, and the full list is on the [contributors page](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/graphs/contributors).
 
 It's an independent project and isn't affiliated with or endorsed by YouTube or Google.
 
