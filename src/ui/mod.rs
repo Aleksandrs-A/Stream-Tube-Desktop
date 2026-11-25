@@ -5,6 +5,8 @@ pub mod image_cache;
 pub mod pages;
 pub mod pip;
 pub mod slot;
+#[cfg(target_os = "linux")]
+mod topbar_drag;
 pub mod widgets;
 
 use gpui_kit::*;

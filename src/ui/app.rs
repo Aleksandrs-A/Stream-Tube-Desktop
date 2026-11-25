@@ -1983,7 +1983,7 @@ impl AppView {
         let hist: std::collections::HashSet<String> = self.history_suggestions.iter().cloned().collect();
         let sel = self.sel_suggestion;
         let maximized = window.is_maximized();
-        div()
+        let bar = div()
             .id("topbar")
             .flex()
             .flex_none()
@@ -2023,8 +2023,7 @@ impl AppView {
                             .child(crate::ui::wordmark(cx)),
                     ),
             )
-            // only the empty gaps move the window: gpui reports the first matching control
-            // area, so a drag area around the buttons would swallow their clicks
+            // Native caption hit testing must leave the controls clickable.
             .child(drag_gap("drag-l").flex_1().min_w(px(24.)))
             .child(
                 div()
@@ -2074,6 +2073,7 @@ impl AppView {
                             deferred(
                                 div()
                                     .id("suggestions")
+                                    .occlude()
                                     .absolute()
                                     .top(px(44.))
                                     .left_0()
@@ -2135,7 +2135,10 @@ impl AppView {
                     .child(self.account_button(cx))
                     .child(drag_gap("drag-c").w_3())
                     .child(window_controls(maximized, cx)),
-            )
+            );
+        #[cfg(target_os = "linux")]
+        let bar = super::topbar_drag::wrap(bar, self.search.clone(), window, cx);
+        bar
     }
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -3111,14 +3114,11 @@ pub fn restore_window(window: &mut Window) {
 /// Empty top-bar space that moves the window (with snap and double-click maximize).
 fn drag_gap(id: &'static str) -> Stateful<Div> {
     let gap = div().id(id).h(px(56.)).window_control_area(WindowControlArea::Drag);
-    // Wayland and X11 require an explicit move request from the mouse press.
     #[cfg(target_os = "linux")]
     let gap = gap.on_mouse_down(MouseButton::Left, |event, window, cx| {
-        cx.stop_propagation();
         if event.click_count == 2 {
             toggle_maximize(window);
-        } else {
-            window.start_window_move();
+            cx.stop_propagation();
         }
     });
     gap
