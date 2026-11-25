@@ -647,6 +647,7 @@ impl Render for ShortsPage {
             ui.content_width - video_w - comments_w - rem * 9.
         };
         let below = side_space < rem * 8. && (ui.fullscreen || !yt_layout);
+        let info_width = if yt_layout { px(250.) } else { side_space.min(px(250.)) };
         let compact_channel = below && !ui.fullscreen && !v.channel_name.is_empty();
         let caption_h = rem * if compact_channel { 4.5 } else { 3.5 };
         let h = if below { available_h - caption_h } else { available_h };
@@ -755,7 +756,7 @@ impl Render for ShortsPage {
                 (!parts.is_empty()).then(|| parts.join(" • "))
             });
             div()
-                .w(if yt_layout { px(250.) } else { side_space.min(px(250.)) })
+                .w(info_width)
                 .min_w_0()
                 .h(h)
                 .flex()
@@ -796,6 +797,8 @@ impl Render for ShortsPage {
             .flex()
             .items_center()
             .justify_center()
+            // Balance the wider title column when there is room beside the controls.
+            .when(!below && !self.show_comments, |d| d.pr((side_space - info_width).clamp(px(0.), rem * 4.)))
             .gap_4()
             .on_scroll(cx.listener(|this, ev: &ScrollEvent, window, cx| {
                 // A touchpad swipe is a stream of small deltas and a wheel notch one big one.
