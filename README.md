@@ -57,6 +57,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Live streams with live chat (Top chat or every message), and chatting when signed in
 - Shorts in a vertical player that moves to the next one by itself, or open them in the regular player. Shorts comments open their replies as threads too
 - Hold Space or press and hold the main video to play at 2x
+- Press `+` / `-` or `>` / `<` to move to the next or previous 0.25x playback speed step
 - Hover previews: rest the pointer on a thumbnail and it plays inside it, muted, with a seek bar to skip around
 - Most replayed graph with "jump ahead", ambient glow around the player (on or off from the player's gear menu), force original audio instead of auto-dubbing
 - Aspect ratio controls for ultrawide screens, like the Ultrawidify extension: *Auto* finds a film's black bars and crops them away so it fills a 21:9 or 32:9 monitor, or pick 21:9, 18:9 or 32:9, *Zoom to fill* or *Stretch*. Choose it from the player's gear menu or *Settings → Player*, or press *Z* to cycle

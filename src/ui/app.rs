@@ -1996,12 +1996,16 @@ impl AppView {
             return;
         }
         let step = store::settings_snapshot().seek_step;
+        let playback_key = match ev.keystroke.key_char.as_deref() {
+            Some(key @ ("-" | "+" | "<" | ">")) => key,
+            _ => k,
+        };
         let held = ev.is_held;
         if k == "space" {
             self.space_down = true;
         }
         let handled = p.update(cx, |pl: &mut Player, cx| {
-            let handled = match (k, m.shift) {
+            let handled = match (playback_key, m.shift) {
                 ("space", _) => {
                     // acted on at release (tap) or while held (2x)
                     if held {
@@ -2061,16 +2065,9 @@ impl AppView {
                     pl.frame_step(true);
                     true
                 }
-                (",", true) | ("<", _) => {
-                    let s = pl.speed;
-                    pl.set_speed(s - 0.25);
-                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", (s - 0.25).max(0.25))));
-                    true
-                }
-                (".", true) | (">", _) => {
-                    let s = pl.speed;
-                    pl.set_speed(s + 0.25);
-                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", s + 0.25)));
+                ("," | "." | "=", true) | ("<" | ">" | "-" | "+", _) => {
+                    pl.step_speed(matches!(playback_key, "." | "=" | ">" | "+"));
+                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", pl.speed)));
                     true
                 }
                 ("home", _) => {
