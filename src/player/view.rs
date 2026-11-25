@@ -64,6 +64,9 @@ pub struct PlayerView {
     /// A press near the seek bar started a seek; the click layer ignores it.
     zone_seek: Option<Instant>,
     drag_vol: bool,
+    /// pointer on the volume button/slider: in the narrow (Shorts) frame the slider
+    /// only slides out then, like YouTube's
+    vol_hover: bool,
     last_click: Option<Instant>,
     /// left button held on the video; after a moment it plays at 2x
     press: Option<Instant>,
@@ -93,6 +96,7 @@ impl PlayerView {
             drag_seek: None,
             zone_seek: None,
             drag_vol: false,
+            vol_hover: false,
             last_click: None,
             press: None,
             press_boosted: false,
@@ -536,6 +540,10 @@ impl Render for PlayerView {
         if self.player.read(cx).show_stats {
             root = root.child(self.render_stats(cx));
         }
+        if !show {
+            // the controls faded out under a still pointer: no hover-out comes for them
+            self.vol_hover = false;
+        }
         if show {
             root = root.child(self.render_controls(time, duration, ui, window, cx));
         }
@@ -849,6 +857,10 @@ impl PlayerView {
         // Narrow frames (the Shorts player) only get the essential buttons.
         let bar_w = f32::from(self.seek_bounds.get().size.width);
         let narrow = bar_w > 0.0 && bar_w < 560.0;
+        // there the volume slider slides out from the volume button on hover (or while
+        // dragged); in a very narrow frame it takes the time readout's place meanwhile
+        let vol_open = !narrow || self.vol_hover || self.drag_vol;
+        let hide_time = narrow && vol_open && bar_w < 400.0;
 
         // seek bar: one segment per chapter (2px gaps), hovered chapter grows
         let active = hover.is_some() || self.drag_seek.is_some();
@@ -1039,14 +1051,21 @@ impl PlayerView {
             })
             .child(
                 div()
+                    .id("vol-group")
                     .flex()
                     .items_center()
                     .group("vol")
+                    .on_hover(cx.listener(|this, h: &bool, _, cx| {
+                        if this.vol_hover != *h {
+                            this.vol_hover = *h;
+                            cx.notify();
+                        }
+                    }))
                     .child(ctl_btn("c-mute", vol_icon).on_click({
                         let pp = pp.clone();
                         move |_, _, cx| pp.update(cx, |p, cx| { p.toggle_mute(); cx.notify() })
                     }))
-                    .when(!narrow, |d| d.child(
+                    .when(vol_open, |d| d.child(
                         div()
                             .id("vol-slider")
                             .relative()
@@ -1071,7 +1090,7 @@ impl PlayerView {
                             ),
                     )),
             )
-            .child(div().ml_2().text_sm().whitespace_nowrap().text_color(white()).child(time_text))
+            .when(!hide_time, |d| d.child(div().ml_2().text_sm().whitespace_nowrap().text_color(white()).child(time_text)))
             .when_some(chapter_title.filter(|_| !narrow && !store::settings_snapshot().hide_chapters), |d, c| {
                 d.child(
                     div()
