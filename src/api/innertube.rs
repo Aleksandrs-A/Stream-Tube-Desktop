@@ -94,6 +94,17 @@ fn walk_items(v: &Value, page: &mut Page) {
                             page.continuation = Some(t);
                         }
                     }
+                    // the newer form (playlists since late 2026):
+                    // { trigger, continuationCommand: { innertubeCommand: { continuationCommand: { token } } } }
+                    "continuationItemViewModel" => {
+                        let mut tokens = Vec::new();
+                        if let Some(cmd) = c.get("continuationCommand") {
+                            find_all(cmd, "token", &mut tokens);
+                        }
+                        if let Some(t) = tokens.iter().find_map(|x| x.as_str()) {
+                            page.continuation = Some(t.to_string());
+                        }
+                    }
                     // Skip noisy sections that duplicate items or are UI chrome.
                     "frameworkUpdates" | "topbar" | "header" | "engagementPanels" | "playerOverlays" | "menu"
                     | "endScreen" | "onResponseReceivedCommands" => {}
@@ -1486,6 +1497,35 @@ mod heatmap_tests {
         for id in ["dQw4w9WgXcQ", "kJQP7kiw5Fk", "LXb3EKWsInQ"] {
             let w = super::watch_next(id, None).unwrap();
             println!("{id}: heatmap={} chapters={}", w.heatmap.len(), w.chapters.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod long_playlist_tests {
+    #[test]
+    #[ignore = "network"]
+    fn long_playlists_load_and_watch_next_sends_a_window() {
+        let pid = "UUX6OQ3DkcsbYNE6H8uQQuVA";
+        let mut page = super::playlist(pid).unwrap();
+        let mut vids = page.videos.clone();
+        while vids.len() < 420 {
+            let Some(t) = page.continuation.take() else { break };
+            let p = super::browse_continue(&t).unwrap();
+            vids.extend(p.items.into_iter().filter_map(|i| i.as_video().cloned()));
+            page.continuation = p.continuation;
+        }
+        eprintln!("loaded {}", vids.len());
+        // playlists page past their first 100 videos
+        assert!(vids.len() > 300, "only {} videos", vids.len());
+        for at in [0usize, 150, 298, 350] {
+            let Some(v) = vids.get(at) else { continue };
+            let w = super::watch_next(&v.id, Some(pid)).unwrap();
+            let items = w.playlist.map(|p| p.items).unwrap_or_default();
+            let first = items.first().and_then(|f| vids.iter().position(|x| x.id == f.id));
+            let last = items.last().and_then(|f| vids.iter().position(|x| x.id == f.id));
+            let me = items.iter().position(|x| x.id == v.id);
+            eprintln!("at {at}: window {} items, first={first:?} last={last:?} me={me:?}", items.len());
         }
     }
 }

@@ -592,6 +592,18 @@ pub fn playlist(playlist_id: &str) -> Result<PlaylistPage> {
     Ok(PlaylistPage { info, description: None, videos, continuation: page.continuation })
 }
 
+/// Adds a video to one of the signed-in account's playlists.
+pub fn add_to_playlist(playlist_id: &str, video_id: &str) -> Result<()> {
+    let r = tv_call(
+        "browse/edit_playlist",
+        json!({ "playlistId": playlist_id, "actions": [{ "action": "ACTION_ADD_VIDEO", "addedVideoId": video_id }] }),
+    )?;
+    if let Some(s) = r.get("status").and_then(Value::as_str).filter(|s| *s != "STATUS_SUCCEEDED") {
+        return Err(anyhow!("edit_playlist: {s}"));
+    }
+    Ok(())
+}
+
 /// Removes several videos from one of the signed-in account's playlists.
 pub fn remove_many_from_playlist(playlist_id: &str, video_ids: &[String]) -> Result<()> {
     for chunk in video_ids.chunks(50) {
