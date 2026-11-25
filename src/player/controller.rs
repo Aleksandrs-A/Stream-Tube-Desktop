@@ -1090,6 +1090,12 @@ impl Player {
         }
     }
 
+    pub fn step_speed(&mut self, increase: bool) {
+        let steps = self.speed / 0.25;
+        let next = if increase { steps.floor() + 1.0 } else { steps.ceil() - 1.0 };
+        self.set_speed(next * 0.25);
+    }
+
     pub fn set_loop(&mut self, l: bool) {
         self.loop_video = l;
     }
