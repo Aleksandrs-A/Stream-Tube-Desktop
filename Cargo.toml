@@ -37,6 +37,9 @@ libc = "0.2"
 # also hides the pointer with the player controls
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"] }
+# GPU video path (src/player/gl_macos.rs): the pixel buffer type GPUI's surface() takes
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBuffer", "CVImageBuffer", "CVPixelBuffer"] }
 
 [profile.dev.package."*"]
 opt-level = 2

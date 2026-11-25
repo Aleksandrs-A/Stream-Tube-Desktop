@@ -1,5 +1,5 @@
 //! Video surface + YouTube-style controls.
-use super::controller::Player;
+use super::controller::{Player, VideoImage};
 use crate::i18n::{t as translate, tf};
 use crate::api::json::format_duration;
 use crate::api::services;
@@ -231,8 +231,11 @@ impl Render for PlayerView {
                 .absolute()
                 .size_full(),
             )
-            .when_some(frame.filter(|_| !audio_only), |d, f| {
-                d.child(img(ImageSource::Render(f)).absolute().size_full().object_fit(ObjectFit::Contain))
+            .when_some(frame.filter(|_| !audio_only), |d, f| match f {
+                VideoImage::Image(f) => d.child(img(ImageSource::Render(f)).absolute().size_full().object_fit(ObjectFit::Contain)),
+                // GL path: the IOSurface goes straight to GPUI's Metal renderer
+                #[cfg(target_os = "macos")]
+                VideoImage::Surface(s) => d.child(gpui_kit::surface(s.0).absolute().size_full().object_fit(ObjectFit::Contain)),
             })
             .when(audio_only, |d| {
                 d.when_some(video.as_ref().map(|v| v.thumbnail.clone()), |d, t| {
