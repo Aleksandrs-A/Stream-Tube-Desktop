@@ -535,3 +535,40 @@ mod token_tests {
         assert_eq!(super::strip_token("/01", t), None);
     }
 }
+
+#[cfg(test)]
+mod live_proxy_tests {
+    use std::io::Read;
+
+    fn get(url: &str) -> (u16, usize) {
+        let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+        let mut r = agent.get(url).header("Range", "bytes=0-65535").call().unwrap();
+        let status = r.status().as_u16();
+        let mut buf = Vec::new();
+        let _ = r.body_mut().as_reader().take(65536).read_to_end(&mut buf);
+        (status, buf.len())
+    }
+
+    /// A real video through the proxy: served with the secret, refused without it.
+    #[test]
+    #[ignore = "network"]
+    fn serves_real_streams_only_with_the_secret() {
+        for id in ["dQw4w9WgXcQ", "bvMPTXaLq5k"] {
+            let info = crate::api::streams::get_streams(id).unwrap();
+            let url = if let Some(hls) = &info.hls_url {
+                super::local_hls(hls, 720, None)
+            } else {
+                let f = info.video.first().unwrap();
+                super::local_url(&f.url, f.content_length, &f.mime)
+            };
+            assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+            let (status, n) = get(&url);
+            eprintln!("{id}: {} via {} -> {status}, {n} bytes", info.source, &url[..url.len().min(90)]);
+            assert!((200..300).contains(&status) && n > 0, "{id}: {status}");
+            // the same path without the secret
+            let p = super::proxy().unwrap();
+            let bare = url.replacen(&format!("/{}", p.token), "", 1);
+            assert_eq!(get(&bare).0, 403);
+        }
+    }
+}

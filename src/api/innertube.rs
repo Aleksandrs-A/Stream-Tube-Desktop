@@ -1382,7 +1382,7 @@ mod tests {
     fn live_channel_playlist() {
         let c = channel("UCsBjURrPoezykLs9EqgamOA", None).unwrap();
         println!("{:?} tabs={:?}", c.info, c.tabs.iter().map(|t| &t.title).collect::<Vec<_>>());
-        let vt = c.tabs.iter().find(|t| t.title == "Videos").unwrap();
+        let vt = c.tabs.iter().find(|t| t.kind == "videos").unwrap();
         let v = channel("UCsBjURrPoezykLs9EqgamOA", vt.params.as_deref()).unwrap();
         assert!(v.page.items.len() > 10);
         println!("{:#?}", v.page.items[0]);
