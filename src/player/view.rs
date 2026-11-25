@@ -1,6 +1,6 @@
 //! Video surface + YouTube-style controls.
 use super::aspect;
-use super::controller::Player;
+use super::controller::{KeyboardFeedback, Player};
 use crate::i18n::{t as translate, tf};
 use crate::api::json::format_duration;
 use crate::api::services;
@@ -455,7 +455,19 @@ impl Render for PlayerView {
             }
         }
 
-        if self.player.read(cx).boost.is_some() {
+        let player = self.player.read(cx);
+        let feedback = match player.keyboard_feedback() {
+            Some(KeyboardFeedback::Volume(volume)) => Some(("volume-2", tf!("{0}%", volume.round()))),
+            Some(KeyboardFeedback::Seek(seconds)) => {
+                let icon = if seconds < 0.0 { "arrow-left" } else { "arrow-right" };
+                let seconds = (seconds * 10.0).round() / 10.0;
+                let label = if seconds == 0.0 { "0".into() } else { format!("{seconds:+}") };
+                Some((icon, tf!("{0} s", label)))
+            }
+            None if player.boost.is_some() => Some(("fast-forward", "2x".into())),
+            None => None,
+        };
+        if let Some((feedback_icon, text)) = feedback {
             root = root.child(
                 div().absolute().top_4().left_0().right_0().flex().justify_center().child(
                     div()
@@ -469,8 +481,8 @@ impl Render for PlayerView {
                         .text_color(white())
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("2x")
-                        .child(crate::ui::icon("fast-forward").size_4().text_color(white())),
+                        .child(text)
+                        .child(icon(feedback_icon).size_4().text_color(white())),
                 ),
             );
         }

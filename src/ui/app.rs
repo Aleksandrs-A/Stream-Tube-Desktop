@@ -4,7 +4,7 @@ use crate::i18n::{t, tf};
 use super::*;
 use crate::api::innertube;
 use crate::api::types::VideoItem;
-use crate::player::controller::{Player, player};
+use crate::player::controller::{KeyboardFeedback, Player, player};
 use crate::player::view::PlayerView;
 use crate::store;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -2031,22 +2031,16 @@ impl AppView {
                     pl.seek_by(10.0);
                     true
                 }
-                ("left", _) => {
-                    pl.seek_by(-step);
+                ("left" | "right", _) => {
+                    let before = pl.time;
+                    pl.seek_by(if k == "left" { -step } else { step });
+                    pl.show_keyboard_feedback(KeyboardFeedback::Seek(pl.time - before), cx);
                     true
                 }
-                ("right", _) => {
-                    pl.seek_by(step);
-                    true
-                }
-                ("up", _) => {
-                    let v = pl.volume;
-                    pl.set_volume(v + 5.0);
-                    true
-                }
-                ("down", _) => {
-                    let v = pl.volume;
-                    pl.set_volume(v - 5.0);
+                ("up" | "down", _) => {
+                    let delta = if k == "up" { 5.0 } else { -5.0 };
+                    pl.set_volume(pl.volume + delta);
+                    pl.show_keyboard_feedback(KeyboardFeedback::Volume(pl.volume), cx);
                     true
                 }
                 ("m", false) => {
