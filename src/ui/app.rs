@@ -2022,7 +2022,7 @@ impl AppView {
         let hist: std::collections::HashSet<String> = self.history_suggestions.iter().cloned().collect();
         let sel = self.sel_suggestion;
         let maximized = window.is_maximized();
-        div()
+        let bar = div()
             .id("topbar")
             .flex()
             .flex_none()
@@ -2062,9 +2062,8 @@ impl AppView {
                             .child(crate::ui::wordmark(cx)),
                     ),
             )
-            // only the empty gaps move the window: gpui reports the first matching control
-            // area, so a drag area around the buttons would swallow their clicks
-            .child(drag_gap("drag-l"))
+            // Native caption hit testing must leave the controls clickable.
+            .child(drag_gap("drag-l").flex_1().min_w(px(24.)))
             .child(
                 div()
                     .relative()
@@ -2113,6 +2112,7 @@ impl AppView {
                             deferred(
                                 div()
                                     .id("suggestions")
+                                    .when(cfg!(target_os = "linux"), |d| d.occlude())
                                     .absolute()
                                     .top(px(44.))
                                     .left_0()
@@ -2163,7 +2163,7 @@ impl AppView {
                         )
                     }),
             )
-            .child(drag_gap("drag-r"))
+            .child(drag_gap("drag-r").flex_1().min_w(px(24.)))
             .child(
                 div()
                     .flex()
@@ -2172,9 +2172,12 @@ impl AppView {
                     .child(self.render_dl_button(cx))
                     .child(icon_button("settings", "settings", cx).on_click(cx.listener(|this, _, window, cx| this.go(Route::Settings, window, cx))))
                     .child(self.account_button(cx))
-                    .child(div().id("drag-c").w_3().h(px(56.)).window_control_area(WindowControlArea::Drag))
+                    .child(drag_gap("drag-c").w_3())
                     .child(window_controls(maximized, cx)),
-            )
+            );
+        #[cfg(target_os = "linux")]
+        let bar = super::topbar_drag::wrap(bar, self.search.clone(), window, cx);
+        bar
     }
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -3094,7 +3097,7 @@ impl Render for AppView {
 
 /// Maximizes, or restores a maximized window.
 pub fn toggle_maximize(window: &mut Window) {
-    if !window.is_maximized() {
+    if cfg!(target_os = "linux") || !window.is_maximized() {
         window.zoom_window();
         return;
     }
@@ -3151,8 +3154,19 @@ pub fn restore_window(window: &mut Window) {
 }
 
 /// Empty top-bar space that moves the window (with snap and double-click maximize).
-fn drag_gap(id: &'static str) -> impl IntoElement {
-    div().id(id).flex_1().min_w(px(24.)).h(px(56.)).window_control_area(WindowControlArea::Drag)
+fn drag_gap(id: &'static str) -> Stateful<Div> {
+    let gap = div()
+        .id(id)
+        .h(px(56.))
+        .window_control_area(WindowControlArea::Drag);
+    #[cfg(target_os = "linux")]
+    let gap = gap.on_mouse_down(MouseButton::Left, |event, window, cx| {
+        if event.click_count == 2 {
+            toggle_maximize(window);
+            cx.stop_propagation();
+        }
+    });
+    gap
 }
 
 /// Minimize / maximize / close, drawn in the top bar. The OS handles the clicks
