@@ -710,6 +710,7 @@
   "Update failed: {0}": "Спроба оновлення зазнала невдачі: {0}",
   "Could not start the installer: {0}": "Не вдалося запустити встановлювач: {0}",
   "Could not start the video engine (libmpv): {0}": "Не вдалося запустити рушій відео (libmpv): {0}",
+  "libmpv-2.dll is missing. Extract the entire Windows ZIP before opening streamtube.exe, or use the Windows installer.": "Файл libmpv-2.dll не знайдено. Повністю розпакуйте ZIP для Windows перед запуском streamtube.exe або скористайтеся інсталятором Windows.",
   "Playback error: {0}": "Помилка відтворення ({0})",
   "Vote failed: {0}": "Голосування зазнало невдачі: {0}",
   "Skipped {0}": "Пропущено «{0}»",

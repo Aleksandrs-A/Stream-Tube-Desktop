@@ -710,6 +710,7 @@
   "Update failed: {0}": "Жаңарту жаңылысы: {0}",
   "Could not start the installer: {0}": "Орнатушысы жегілмеді: {0}",
   "Could not start the video engine (libmpv): {0}": "Видео тетігі (libmpv) жегілмеді: {0}",
+  "libmpv-2.dll is missing. Extract the entire Windows ZIP before opening streamtube.exe, or use the Windows installer.": "libmpv-2.dll файлы табылмады. streamtube.exe файлын ашпас бұрын Windows ZIP архивін толық шығарыңыз немесе Windows орнатқышын пайдаланыңыз.",
   "Playback error: {0}": "Ойнату қатесі ({0})",
   "Vote failed: {0}": "Санат: {0}",
   "Skipped {0}": "«{0}» өткізіліп жіберілді",
