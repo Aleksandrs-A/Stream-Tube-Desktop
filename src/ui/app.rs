@@ -3113,7 +3113,10 @@ pub fn restore_window(window: &mut Window) {
 
 /// Empty top-bar space that moves the window (with snap and double-click maximize).
 fn drag_gap(id: &'static str) -> Stateful<Div> {
-    let gap = div().id(id).h(px(56.)).window_control_area(WindowControlArea::Drag);
+    let gap = div()
+        .id(id)
+        .h(px(56.))
+        .window_control_area(WindowControlArea::Drag);
     #[cfg(target_os = "linux")]
     let gap = gap.on_mouse_down(MouseButton::Left, |event, window, cx| {
         if event.click_count == 2 {
