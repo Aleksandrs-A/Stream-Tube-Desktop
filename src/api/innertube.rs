@@ -746,12 +746,17 @@ pub fn parse_youtube_url(input: &str) -> Option<ResolvedUrl> {
     if let Some(v) = get_param("v").filter(|v| is_id(v)) {
         return Some(ResolvedUrl::Video(v));
     }
-    if let Some(l) = get_param("list") {
+    // links can come from any web page (streamtube: links), so only take IDs
+    // made of the characters YouTube uses
+    let is_list_id = |x: &str| (2..=64).contains(&x.len()) && x.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if let Some(l) = get_param("list").filter(|l| is_list_id(l)) {
         return Some(ResolvedUrl::Playlist(l));
     }
     if let Some(rest) = s.split("/channel/").nth(1) {
-        let id: String = rest.chars().take_while(|c| *c != '/' && *c != '?').collect();
-        return Some(ResolvedUrl::Channel(id));
+        let id: String = rest.chars().take_while(|c| *c != '/' && *c != '?' && *c != '#').collect();
+        if id.starts_with("UC") && is_list_id(&id) {
+            return Some(ResolvedUrl::Channel(id));
+        }
     }
     None
 }
