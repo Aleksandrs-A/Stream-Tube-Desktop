@@ -86,6 +86,35 @@ fn connect(cookies: BTreeMap<String, String>) -> Result<String> {
     Ok(name)
 }
 
+/// Writes the browser sign-in's youtube.com cookies as a Netscape cookies.txt for
+/// yt-dlp, in the private profile folder under a name of its own. The caller
+/// deletes it when yt-dlp is done. None when the browser sign-in isn't connected.
+pub fn write_cookies_file() -> Option<PathBuf> {
+    use std::sync::atomic::AtomicU64;
+    static N: AtomicU64 = AtomicU64::new(0);
+    let text = {
+        let s = session().lock();
+        let s = s.as_ref()?;
+        let mut t = String::from("# Netscape HTTP Cookie File\n");
+        for (k, v) in &s.cookies {
+            // domain, include subdomains, path, secure, expiry, name, value
+            t.push_str(&format!(".youtube.com\tTRUE\t/\tTRUE\t2147483647\t{k}\t{v}\n"));
+        }
+        t
+    };
+    let path = crate::store::data_dir().join(format!("yt-dlp-cookies-{}-{}.txt", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    use std::io::Write;
+    opts.open(&path).ok()?.write_all(text.as_bytes()).ok()?;
+    Some(path)
+}
+
 fn cookie_header() -> Option<String> {
     let s = session().lock();
     let s = s.as_ref()?;

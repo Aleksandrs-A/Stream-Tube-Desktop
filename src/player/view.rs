@@ -14,8 +14,14 @@ use std::time::{Duration, Instant};
 
 fn playback_error_message(error: &str) -> String {
     let lower = error.to_ascii_lowercase();
-    if lower.contains("sign in to confirm") && lower.contains("not a bot") {
-        return "YouTube blocked anonymous playback for this video. Stream Tube uses your sign-in for account features. Try another network.".into();
+    if lower.contains("sign in to confirm") && (lower.contains("not a bot") || lower.contains("your age")) {
+        // the signed-in retry (yt-dlp with the browser sign-in) ran already
+        let msg = if crate::api::web::connected() {
+            "YouTube blocked playback for this video, even with your account. Make sure yt-dlp is installed and up to date (Settings → Update yt-dlp), or try another network."
+        } else {
+            "YouTube blocked anonymous playback for this video. Connect “YouTube watch history” in Settings to play it with your account, or try another network."
+        };
+        return crate::i18n::t(msg).into();
     }
     crate::ui::friendly_error(error)
 }
@@ -28,7 +34,7 @@ mod playback_error_tests {
     fn explains_youtube_bot_check_errors() {
         let message = playback_error_message("visionOS: Sign in to confirm you’re not a bot");
         assert!(message.contains("anonymous playback"));
-        assert!(message.contains("Try another network."));
+        assert!(message.contains("try another network."));
     }
 
     #[::core::prelude::v1::test]

@@ -626,7 +626,7 @@ impl SettingsPage {
                         pill("web-out", Some("unlink"), "Disconnect", cx).on_click(|_, _, cx| crate::ui::app::disconnect_web(cx)),
                     ),
                     None => (
-                        "Sign in through your browser so videos you watch here show in your YouTube history and resume on your phone".to_string(),
+                        "Sign in through your browser so videos you watch here show in your YouTube history and resume on your phone. It also plays age-restricted videos and ones YouTube shows a bot check for".to_string(),
                         pill("web-in", Some("history"), "Connect", cx).on_click(|_, _, cx| crate::ui::app::open_web_sign_in(cx)),
                     ),
                 };

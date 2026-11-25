@@ -137,6 +137,9 @@ pub struct CommentPage {
 #[derive(Clone, Debug, Default)]
 pub struct ChannelTab {
     pub title: String,
+    /// what the tab is, whatever language its title is in: the last part of its
+    /// URL ("featured", "videos", "shorts", "streams", "playlists", …)
+    pub kind: String,
     pub params: Option<String>,
     pub selected: bool,
 }

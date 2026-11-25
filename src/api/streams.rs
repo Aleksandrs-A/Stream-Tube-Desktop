@@ -56,6 +56,11 @@ pub fn prefetch_on_hover(video_id: &str) {
 }
 
 fn resolve(video_id: &str) -> Result<StreamInfo> {
+    let res = resolve_anonymous(video_id);
+    with_sign_in_fallback(video_id, res)
+}
+
+fn resolve_anonymous(video_id: &str) -> Result<StreamInfo> {
     let mode = crate::store::settings_snapshot().stream_backend.clone();
     match mode.as_str() {
         "ytdlp" => ytdlp_streams(video_id),
@@ -778,9 +783,47 @@ pub fn hide_window(cmd: &mut Command) {
 }
 
 pub fn ytdlp_streams(video_id: &str) -> Result<StreamInfo> {
+    ytdlp_streams_with(video_id, None)
+}
+
+/// Whether YouTube refused an anonymous caller: a bot check, an age check, or
+/// a video only signed-in viewers may see.
+fn needs_sign_in(error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    e.contains("not a bot") || e.contains("confirm your age") || e.contains("login_required") || e.contains("sign in to") || e.contains("age-restricted") || e.contains("--cookies")
+}
+
+/// yt-dlp with the browser sign-in's cookies, for videos YouTube only plays to a
+/// signed-in account. None when the browser sign-in isn't connected.
+fn ytdlp_signed_in(video_id: &str) -> Option<Result<StreamInfo>> {
+    let cookies = crate::api::web::write_cookies_file()?;
+    let res = ytdlp_streams_with(video_id, Some(&cookies));
+    let _ = std::fs::remove_file(&cookies);
+    Some(res)
+}
+
+/// Retries a resolution YouTube refused to an anonymous caller with the account.
+fn with_sign_in_fallback(video_id: &str, res: Result<StreamInfo>) -> Result<StreamInfo> {
+    match res {
+        Err(e) if needs_sign_in(&format!("{e:#}")) => match ytdlp_signed_in(video_id) {
+            Some(Ok(info)) => Ok(info),
+            Some(Err(e2)) => Err(anyhow!("{e}\nyt-dlp (signed in): {e2}")),
+            None if crate::api::auth::signed_in() => Err(anyhow!(
+                "{e}\nYouTube wants a signed-in viewer for this video. Connect “YouTube watch history” in Settings (it signs in through your browser) and Stream Tube will play it with your account through yt-dlp."
+            )),
+            None => Err(e),
+        },
+        other => other,
+    }
+}
+
+fn ytdlp_streams_with(video_id: &str, cookies: Option<&std::path::Path>) -> Result<StreamInfo> {
     let bin = ytdlp_path().ok_or_else(|| anyhow!("yt-dlp not found (install it or set its path in Settings)"))?;
     let mut cmd = Command::new(bin);
     cmd.args(["-J", "--no-warnings", "--no-playlist"]);
+    if let Some(c) = cookies {
+        cmd.arg("--cookies").arg(c);
+    }
     if let Some(p) = crate::store::proxy_setting() {
         cmd.arg("--proxy").arg(p);
     }

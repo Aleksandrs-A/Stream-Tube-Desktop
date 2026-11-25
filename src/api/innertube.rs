@@ -811,7 +811,8 @@ pub fn channel(channel_id: &str, tab_params: Option<&str>) -> Result<ChannelPage
                 }
             }
             if !title.is_empty() {
-                tabs.push(ChannelTab { title, params, selected });
+                let kind = tab_kind(tr, &title);
+                tabs.push(ChannelTab { title, kind, params, selected });
             }
         }
     }
@@ -830,6 +831,19 @@ pub fn channel(channel_id: &str, tab_params: Option<&str>) -> Result<ChannelPage
         }
     }
     Ok(ChannelPage { info, banner, tabs, page })
+}
+
+/// A channel tab's kind from its URL ("/@name/videos" -> "videos"). Titles follow
+/// the content language ("Videolar", "Видео"), so they can't tell tabs apart.
+fn tab_kind(tab: &Value, title: &str) -> String {
+    s(tab, "/endpoint/commandMetadata/webCommandMetadata/url")
+        .and_then(|u| u.split('?').next().and_then(|p| p.rsplit('/').next()).map(str::to_ascii_lowercase))
+        .filter(|k| !k.is_empty() && !k.starts_with('@') && !k.starts_with("uc"))
+        .unwrap_or_else(|| match title {
+            "Home" => "featured".into(),
+            "Live" => "streams".into(),
+            other => other.to_ascii_lowercase(),
+        })
 }
 
 /// Just a channel's avatar, for feeds whose items don't include one.
@@ -1526,6 +1540,23 @@ mod long_playlist_tests {
             let last = items.last().and_then(|f| vids.iter().position(|x| x.id == f.id));
             let me = items.iter().position(|x| x.id == v.id);
             eprintln!("at {at}: window {} items, first={first:?} last={last:?} me={me:?}", items.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod channel_tab_tests {
+    /// Tabs are told apart by kind in any content language.
+    #[test]
+    #[ignore = "network"]
+    fn channel_tabs_have_kinds_in_other_languages() {
+        crate::store::update_settings(|s| s.language = "tr".into());
+        let page = super::channel("UCBJycsmduvYEL83R_U4JriQ", None).unwrap();
+        crate::store::update_settings(|s| s.language = "en".into());
+        let kinds: Vec<_> = page.tabs.iter().map(|t| (t.title.clone(), t.kind.clone())).collect();
+        eprintln!("{kinds:?}");
+        for k in ["featured", "videos", "shorts", "playlists"] {
+            assert!(kinds.iter().any(|(_, kind)| kind == k), "no {k} tab in {kinds:?}");
         }
     }
 }
