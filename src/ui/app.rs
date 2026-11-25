@@ -3018,21 +3018,9 @@ impl Render for AppView {
         if (f32::from(window.rem_size()) - 16.0 * scale).abs() > 0.01 {
             window.set_rem_size(px(16.0 * scale));
         }
-        let vp = window.viewport_size();
         let ui = *cx.global::<UiState>();
         let is_watch = matches!(self.route, Route::Watch { .. });
-        let sidebar_w = if is_watch {
-            0.0
-        } else if ui.sidebar_open {
-            232.0
-        } else {
-            COLLAPSED_SIDEBAR_WIDTH
-        };
-        {
-            let u = cx.global_mut::<UiState>();
-            u.viewport = vp;
-            u.content_width = vp.width - px(sidebar_w) - px(48.);
-        }
+        cx.global_mut::<UiState>().viewport = window.viewport_size();
         let is_shorts = matches!(self.route, Route::Shorts(_));
         let fullscreen = ui.fullscreen && (is_watch || is_shorts);
         let mut root = div()
@@ -3058,9 +3046,28 @@ impl Render for AppView {
                 cx.listener(|this, _, window, cx| this.forward(window, cx)),
             );
         let has_slot = matches!(self.route, Route::Watch { .. } | Route::Shorts(_));
+        let page_id = self.page.entity_id();
         let page_area = div()
             .relative()
             .overflow_hidden()
+            // Measure inside the page's px_6 gutters before the cached page lays out its cards.
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        let width = bounds.size.width;
+                        if cx.global::<UiState>().content_width != width {
+                            cx.global_mut::<UiState>().content_width = width;
+                            cx.notify(page_id);
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .left_6()
+                .right_6()
+                .top_0()
+                .h_0(),
+            )
             .child(
                 // each newly shown page fades in; the animation stops after 160 ms
                 div()

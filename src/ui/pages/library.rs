@@ -323,10 +323,10 @@ impl LibraryPage {
 }
 
 impl Render for LibraryPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = pal(cx);
         let width = content_width(cx);
-        let (_, w) = grid_columns(width, 260.0);
+        let (_, w) = grid_columns(width, 260.0, window.rem_size());
         let pls = store::playlists();
         let mut cards: Vec<AnyElement> = pls
             .iter()
@@ -381,7 +381,7 @@ impl Render for LibraryPage {
         );
         let saved = store::saved_playlists();
         let history: Vec<_> = store::history_list("", 12).into_iter().map(|h| h.video).collect();
-        let (_, hw) = grid_columns(width, 220.0);
+        let (_, hw) = grid_columns(width, 220.0, window.rem_size());
         page_scroll("lib-scroll", &self.scroll).child(
             div()
                 .flex()

@@ -455,8 +455,8 @@ impl Render for HomePage {
         let p = pal(cx);
         let s = store::settings_snapshot();
         let rem = window.rem_size();
-        let width = content_width(cx) + px(48.) - rem * 3.0;
-        let (columns, card_width) = grid_columns_with_gap(width, 300.0, rem);
+        let width = content_width(cx);
+        let (columns, card_width) = grid_columns(width, 300.0, rem);
         let mut chips = div().flex().gap_3().py_3().px_6().bg(p.bg).child(
             chip(
                 "chip-all",

@@ -711,11 +711,7 @@ pub fn grid_row_gap() -> Pixels {
     })
 }
 
-pub fn grid_columns(avail: Pixels, min_card: f32) -> (usize, Pixels) {
-    grid_columns_with_gap(avail, min_card, px(16.))
-}
-
-pub fn grid_columns_with_gap(avail: Pixels, min_card: f32, gap: Pixels) -> (usize, Pixels) {
+pub fn grid_columns(avail: Pixels, min_card: f32, gap: Pixels) -> (usize, Pixels) {
     let cfg = store::settings_snapshot().grid_columns as usize;
     let gap: f32 = gap.into();
     let w: f32 = avail.into();
