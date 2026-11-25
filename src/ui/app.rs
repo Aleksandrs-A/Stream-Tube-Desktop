@@ -51,6 +51,8 @@ impl Route {
 #[derive(Clone, Copy, Default)]
 pub struct UiState {
     pub fullscreen: bool,
+    /// fullscreen layout inside the window, without OS fullscreen
+    pub windowed: bool,
     pub sidebar_open: bool,
     pub content_width: Pixels,
     pub viewport: Size<Pixels>,
@@ -154,9 +156,7 @@ pub fn go_back(window: &mut Window, cx: &mut App) {
 
 /// Leaves the watch page while keeping playback (mini player).
 pub fn go_back_keep_playing(window: &mut Window, cx: &mut App) {
-    if cx.global::<UiState>().fullscreen {
-        toggle_fullscreen(window, cx);
-    }
+    exit_fullscreen(window, cx);
     if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
         app.update(cx, |a, cx| {
             if a.history.is_empty() {
@@ -171,13 +171,48 @@ pub fn go_back_keep_playing(window: &mut Window, cx: &mut App) {
 pub fn toggle_fullscreen(window: &mut Window, cx: &mut App) {
     window.toggle_fullscreen();
     let ui = cx.global_mut::<UiState>();
-    ui.fullscreen = !ui.fullscreen;
+    if ui.windowed {
+        // windowed fullscreen -> real fullscreen, the layout stays the same
+        ui.windowed = false;
+    } else {
+        ui.fullscreen = !ui.fullscreen;
+    }
     cx.refresh_windows();
 }
 
 pub fn toggle_theater_mode(cx: &mut App) {
     store::update_settings(|settings| settings.theater_mode = !settings.theater_mode);
     cx.refresh_windows();
+}
+
+/// The player fills the whole window (no top bar, sidebar or page) without going
+/// to OS fullscreen, like the "Windowed FullScreen" browser extension.
+pub fn toggle_windowed_fullscreen(window: &mut Window, cx: &mut App) {
+    let ui = cx.global_mut::<UiState>();
+    if ui.windowed {
+        ui.windowed = false;
+        ui.fullscreen = false;
+    } else if ui.fullscreen {
+        // real fullscreen -> windowed fullscreen
+        window.toggle_fullscreen();
+        ui.windowed = true;
+    } else {
+        ui.fullscreen = true;
+        ui.windowed = true;
+    }
+    cx.refresh_windows();
+}
+
+/// Leaves either kind of fullscreen.
+pub fn exit_fullscreen(window: &mut Window, cx: &mut App) {
+    let ui = cx.global_mut::<UiState>();
+    if ui.windowed {
+        ui.windowed = false;
+        ui.fullscreen = false;
+        cx.refresh_windows();
+    } else if ui.fullscreen {
+        toggle_fullscreen(window, cx);
+    }
 }
 
 /// Called by the player when the queue advances so the watch page follows.
@@ -1068,7 +1103,7 @@ impl AppView {
             return;
         }
         if cx.global::<UiState>().fullscreen && !matches!(route, Route::Watch { .. }) {
-            toggle_fullscreen(window, cx);
+            exit_fullscreen(window, cx);
         }
         let page = build_page(&route, window, cx);
         let old_route = std::mem::replace(&mut self.route, route);
@@ -1138,7 +1173,7 @@ impl AppView {
             _ => build_page(&self.route.clone(), window, cx),
         };
         if cx.global::<UiState>().fullscreen && !matches!(self.route, Route::Watch { .. }) {
-            toggle_fullscreen(window, cx);
+            exit_fullscreen(window, cx);
         }
         window.set_window_title(&format!("{} - Stream Tube", self.route.title()));
         window.focus(&self.focus, cx);
@@ -1765,7 +1800,7 @@ impl AppView {
                 return;
             }
             if cx.global::<UiState>().fullscreen {
-                toggle_fullscreen(window, cx);
+                exit_fullscreen(window, cx);
                 return;
             }
         }
@@ -1960,6 +1995,7 @@ impl AppView {
         }
         match (k, m.shift) {
             ("f", false) => toggle_fullscreen(window, cx),
+            ("'", _) => toggle_windowed_fullscreen(window, cx),
             ("t", false) => toggle_theater_mode(cx),
             ("i", false) => {
                 if matches!(self.route, Route::Watch { .. }) {
