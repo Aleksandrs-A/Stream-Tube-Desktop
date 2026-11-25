@@ -55,6 +55,8 @@ pub struct Player {
     /// average colour of recent frames, for the ambient glow
     pub ambient: Option<Rgba>,
     ambient_tick: u32,
+    /// black bars found in recent frames, for the "Auto" aspect mode
+    pub auto_crop: super::aspect::AutoCrop,
     pub loop_video: bool,
     load_serial: u64,
     last_progress_save: f64,
@@ -139,6 +141,7 @@ impl Player {
             annotations: Arc::new(Vec::new()),
             ambient: None,
             ambient_tick: 0,
+            auto_crop: Default::default(),
             loop_video: s.loop_video,
             load_serial: 0,
             last_progress_save: 0.0,
@@ -275,6 +278,10 @@ impl Player {
                                     cx.emit(PlayerEvent::Ambient);
                                 }
                             }
+                        }
+                        // a few looks a second are enough to follow the bars
+                        if self.ambient_tick % 10 == 0 && store::settings_snapshot().aspect_mode == "auto" {
+                            self.auto_crop.feed(super::aspect::detect_bars(&f.data, f.width, f.height));
                         }
                         if let Some(buf) = image::RgbaImage::from_raw(f.width, f.height, f.data) {
                             let img = Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(buf)]));
@@ -524,6 +531,7 @@ impl Player {
         self.heatmap.clear();
         self.annotations = Arc::new(Vec::new());
         self.ambient = None;
+        self.auto_crop = Default::default();
         self.channel_id = video.channel_id.clone();
         self.audio_track = None;
         if let Some(old) = self.frame.take() {
