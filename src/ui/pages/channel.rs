@@ -185,7 +185,7 @@ impl ChannelPage {
 }
 
 impl Render for ChannelPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = pal(cx);
         let has_more = self.continuation.is_some();
         maybe_load_more(&self.scroll, &mut self.loading_more, has_more, cx, |this, cx| this.load_more(cx));
@@ -348,10 +348,10 @@ impl Render for ChannelPage {
                 if items.is_empty() {
                     empty_state("video-off", "This channel has no content here", "", cx).into_any_element()
                 } else if tab_title == "Shorts" && self.searching.is_none() {
-                    let (_, w) = grid_columns(width, 200.0);
+                    let (_, w) = grid_columns(width, 200.0, window.rem_size());
                     grid(items.iter().filter_map(|i| i.as_video()).map(|v| shorts_card(v, w, cx)).collect(), width).into_any_element()
                 } else {
-                    let (_, w) = grid_columns(width, 280.0);
+                    let (_, w) = grid_columns(width, 280.0, window.rem_size());
                     let mut col = div().flex().flex_col().gap_6().child(grid(items.iter().map(|i| grid_item(i, w, tab_title == "Home" || self.searching.is_some(), cx)).collect(), width));
                     if self.loading_more {
                         col = col.child(spinner(cx));
