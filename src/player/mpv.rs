@@ -470,10 +470,18 @@ impl Mpv {
                     // (the buffer is 64-byte aligned, so reading it as u32 is fine)
                     let src = std::slice::from_raw_parts(buf.as_ptr() as *const u32, bytes / 4);
                     let opaque = u32::from_ne_bytes([0, 0, 0, 0xFF]);
-                    let mut data = vec![0u8; bytes];
-                    for (d, s) in data.chunks_exact_mut(4).zip(src) {
-                        d.copy_from_slice(&(s | opaque).to_ne_bytes());
+                    // a frame the UI never picked up gives its buffer back; otherwise a
+                    // fresh one, written once (not zeroed first: ~8 MB a frame at 1080p)
+                    let mut data = r.frame.lock().take().map(|f| f.data).filter(|d| d.capacity() >= bytes).unwrap_or_default();
+                    data.clear();
+                    data.reserve_exact(bytes);
+                    for (d, s) in data.spare_capacity_mut()[..bytes].chunks_exact_mut(4).zip(src) {
+                        for (o, b) in d.iter_mut().zip((s | opaque).to_ne_bytes()) {
+                            o.write(b);
+                        }
                     }
+                    // SAFETY: the loop above wrote all `bytes` bytes (bytes is w*h*4, src has w*h pixels)
+                    data.set_len(bytes);
                     let serial = r.serial.fetch_add(1, Ordering::Relaxed) + 1;
                     *r.frame.lock() = Some(VideoFrame { width: w, height: h, data, serial });
                     frame_cb(MpvEvent::Frame);
