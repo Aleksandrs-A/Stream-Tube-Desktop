@@ -553,7 +553,9 @@ fn open_with_default(info: &crate::api::types::StreamInfo, start: Option<u64>) -
     }
     m3u.push_str(&url);
     m3u.push('\n');
-    let path = std::env::temp_dir().join("streamtube-play.m3u");
+    // in the app's own (private) folder: a fixed name in the shared /tmp could be a
+    // symlink another user planted
+    let path = store::data_dir().join("streamtube-play.m3u");
     std::fs::write(&path, m3u)?;
     open::that(&path)?;
     Ok(translate("your default player").into())

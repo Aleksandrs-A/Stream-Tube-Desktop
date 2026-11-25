@@ -351,6 +351,25 @@ pub fn proxy_setting() -> Option<String> {
     (!p.trim().is_empty()).then_some(p)
 }
 
+/// The profile holds the sign-in (OAuth tokens and Google cookies), so on Linux and
+/// macOS only its owner may open it: the folder is 0700 and the files already in it
+/// 0600. Windows keeps %APPDATA% per user already.
+#[cfg(unix)]
+fn make_private(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_file()) {
+                let _ = std::fs::set_permissions(e.path(), std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn make_private(_dir: &std::path::Path) {}
+
 pub fn data_dir() -> PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
@@ -358,6 +377,7 @@ pub fn data_dir() -> PathBuf {
         if let Some(d) = std::env::var_os("STREAMTUBE_DATA_DIR").filter(|d| !d.is_empty()) {
             let d = PathBuf::from(d);
             let _ = std::fs::create_dir_all(&d);
+            make_private(&d);
             return d;
         }
         // tests never touch the real profile
@@ -375,6 +395,7 @@ pub fn data_dir() -> PathBuf {
             let _ = std::fs::rename(&old, &d);
         }
         let _ = std::fs::create_dir_all(&d);
+        make_private(&d);
         // A -wal/-shm left without its database belongs to some other copy of it;
         // SQLite would replay it onto whatever database is put there next and
         // damage it, so drop it before anything opens the database.

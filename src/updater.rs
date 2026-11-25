@@ -235,7 +235,8 @@ pub fn install(cx: &mut App) {
     let r2 = result.clone();
     std::thread::spawn(move || {
         let res = (|| -> Result<std::path::PathBuf> {
-            let dir = std::env::temp_dir().join("streamtube-update");
+            // the app's own folder, not a predictable path in a shared temp folder
+            let dir = crate::store::data_dir().join("update");
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir)?;
             let path = dir.join(&name);
