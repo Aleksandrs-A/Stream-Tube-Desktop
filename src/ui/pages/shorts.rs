@@ -3,7 +3,7 @@ use crate::i18n::t;
 use crate::api::json::compact_number;
 use crate::api::services;
 use crate::api::types::*;
-use crate::player::controller::player;
+use crate::player::controller::{PlayerEvent, player};
 use crate::store;
 use crate::ui::app::{Route, UiState, navigate};
 use crate::ui::*;
@@ -40,7 +40,15 @@ pub struct ShortsPage {
 
 impl ShortsPage {
     pub fn new(start: Option<String>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let sub = cx.subscribe(&player(cx), |this: &mut Self, _, ev: &crate::player::controller::PlayerEvent, cx| {
+        let sub = cx.subscribe(&player(cx), |this: &mut Self, pl, ev: &PlayerEvent, cx| {
+            if matches!(ev, PlayerEvent::Loaded) {
+                if let Some(short) = this.list.get_mut(this.idx).filter(|v| v.title.trim().is_empty()) {
+                    if let Some(video) = pl.read(cx).video.as_ref().filter(|v| v.id == short.id && !v.title.trim().is_empty()) {
+                        short.title.clone_from(&video.title);
+                        cx.notify();
+                    }
+                }
+            }
             if matches!(ev, crate::player::controller::PlayerEvent::Ended) && store::settings_snapshot().shorts_autoadvance {
                 this.advance(cx);
             }
@@ -619,7 +627,7 @@ impl ShortsPage {
 }
 
 impl Render for ShortsPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = pal(cx);
         let ui = *cx.global::<UiState>();
         if self.list.is_empty() {
@@ -627,11 +635,43 @@ impl Render for ShortsPage {
             return div().size_full().child(if self.loading { spinner(cx).into_any_element() } else { empty_state("zap", "No Shorts found", "", cx).into_any_element() }).into_any_element();
         }
         let v = self.list[self.idx].clone();
+        let rem = window.rem_size();
+        let yt_layout = store::settings_snapshot().shorts_yt_layout;
+        let available_h = if ui.fullscreen { ui.viewport.height.max(px(240.)) } else { (ui.viewport.height - px(88.)).max(px(400.)) };
+        let video_w = available_h * (9. / 16.);
+        // Use the space beside the video first. On small windows give the title its own row.
+        let side_space = if ui.fullscreen {
+            (ui.viewport.width - video_w) * 0.5 - rem * 2.
+        } else {
+            let comments_w = if self.show_comments { px(380.) + rem } else { px(0.) };
+            ui.content_width - video_w - comments_w - rem * 9.
+        };
+        let below = side_space < rem * 8. && (ui.fullscreen || !yt_layout);
+        let info_width = if yt_layout { px(250.) } else { side_space.min(px(250.)) };
+        let compact_channel = below && !ui.fullscreen && !v.channel_name.is_empty();
+        let caption_h = rem * if compact_channel { 4.5 } else { 3.5 };
+        let h = if below { available_h - caption_h } else { available_h };
+        let w = (h * (9. / 16.)).min(ui.viewport.width);
+        let title = |color: Hsla| {
+            div().min_w_0().text_base().font_weight(FontWeight::SEMIBOLD).text_color(color).line_clamp(if below { 2 } else { 4 }).child(v.title.clone())
+        };
+        let video_column = |video: Div| {
+            div().w(w).min_w_0().flex().flex_col().child(video).when(below, |d| {
+                d.child(
+                    div().w_full().h(caption_h).pt_1()
+                        .child(title(if ui.fullscreen { white() } else { p.text }))
+                        .when(compact_channel, |d| {
+                            let channel = v.channel_id.clone();
+                            d.child(div().id("shorts-caption-channel").text_xs().text_color(p.text2).truncate().child(v.channel_name.clone())
+                                .when_some(channel, |d, id| d.cursor_pointer().on_click(move |_, window, cx| navigate(Route::Channel(id.clone()), window, cx))))
+                        }),
+                )
+            })
+        };
         if ui.fullscreen {
-            let h = ui.viewport.height.max(px(240.));
-            let w = (h * (9. / 16.)).min(ui.viewport.width);
             return div()
                 .id("shorts-fs")
+                .relative()
                 .size_full()
                 .bg(black())
                 .flex()
@@ -656,19 +696,12 @@ impl Render for ShortsPage {
                         this.step(d, window, cx);
                     }
                 }))
-                .child(
-                    div()
-                        .relative()
-                        .w(w)
-                        .h(h)
-                        .overflow_hidden()
-                        .bg(black())
-                        .child(crate::ui::slot::player_slot(cx)),
-                )
+                .when(!below, |d| d.child(
+                    div().absolute().right((ui.viewport.width + w) * 0.5 + rem).bottom_4().w(side_space.min(px(250.))).child(title(white())),
+                ))
+                .child(video_column(div().relative().w_full().h(h).overflow_hidden().bg(black()).child(crate::ui::slot::player_slot(cx))))
                 .into_any_element();
         }
-        let h = (ui.viewport.height - px(56. + 32.)).max(px(400.));
-        let w = h * (9. / 16.);
         let votes = self.votes.get(&v.id).cloned();
         let cid = v.channel_id.clone();
         let watch_id = v.id.clone();
@@ -689,14 +722,13 @@ impl Render for ShortsPage {
         let can_up = self.idx > 0;
         let can_down = self.idx + 1 < self.list.len();
         let st = store::settings_snapshot();
-        let yt_layout = st.shorts_yt_layout;
         let edge_nav = yt_layout && st.shorts_edge_nav;
         let show_subscribe = yt_layout && st.shorts_show_subscribe;
         let show_dislike = !yt_layout || st.shorts_show_dislike;
         let dislike_btn = show_dislike.then(|| {
             action("sh-dislike", "thumbs-down", votes.as_ref().map(|v| compact_number(v.dislikes)).unwrap_or_else(|| t("Dislike").into()), cx)
         });
-        let yt_info_panel = yt_layout.then(|| {
+        let info_panel = (!below).then(|| {
             let meta = self.meta.get(&v.id);
             let cid_yt = cid.clone();
             let ch = meta
@@ -719,12 +751,12 @@ impl Render for ShortsPage {
             } else {
                 None
             };
-            let meta_line = meta.and_then(|m| {
+            let meta_line = meta.filter(|_| yt_layout).and_then(|m| {
                 let parts: Vec<&str> = [m.views_text.as_str(), m.date_text.as_str()].into_iter().filter(|s| !s.is_empty()).collect();
                 (!parts.is_empty()).then(|| parts.join(" • "))
             });
             div()
-                .w(px(250.))
+                .w(info_width)
                 .min_w_0()
                 .h(h)
                 .flex()
@@ -755,7 +787,7 @@ impl Render for ShortsPage {
                         ),
                 )
                 .when_some(sub_btn, |d, btn| d.child(div().flex().items_center().child(btn)))
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.text).line_clamp(4).child(v.title.clone()))
+                .child(title(p.text))
                 .when_some(meta_line, |d, t| d.child(div().text_xs().text_color(p.text2).child(t)))
         });
         div()
@@ -765,6 +797,8 @@ impl Render for ShortsPage {
             .flex()
             .items_center()
             .justify_center()
+            // Balance the wider title column when there is room beside the controls.
+            .when(!below && !self.show_comments, |d| d.pr((side_space - info_width).clamp(px(0.), rem * 4.)))
             .gap_4()
             .on_scroll(cx.listener(|this, ev: &ScrollEvent, window, cx| {
                 // A touchpad swipe is a stream of small deltas and a wheel notch one big one.
@@ -791,46 +825,8 @@ impl Render for ShortsPage {
                     this.step(d, window, cx);
                 }
             }))
-            .when_some(yt_info_panel, |d, panel| d.child(panel))
-            .child(
-                div()
-                    .relative()
-                    .w(w)
-                    .h(h)
-                    .rounded_xl()
-                    .overflow_hidden()
-                    .bg(black())
-                    .child(crate::ui::slot::player_slot(cx))
-                    .when(!yt_layout, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .right_0()
-                                .bottom(px(70.))
-                                .px_4()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .id("sh-chan")
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .cursor_pointer()
-                                        .on_click(move |_, window, cx| {
-                                            if let Some(c) = cid.clone() {
-                                                navigate(Route::Channel(c), window, cx);
-                                            }
-                                        })
-                                        .child(avatar(v.channel_avatar.as_deref(), px(32.), &v.channel_name, cx))
-                                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(white()).child(v.channel_name.clone())),
-                                )
-                                .child(div().text_sm().text_color(white()).line_clamp(2).child(v.title.clone())),
-                        )
-                    }),
-            )
+            .children(info_panel)
+            .child(video_column(div().relative().w_full().h(h).rounded_xl().overflow_hidden().bg(black()).child(crate::ui::slot::player_slot(cx))))
             .child(
                 div()
                     .flex()
