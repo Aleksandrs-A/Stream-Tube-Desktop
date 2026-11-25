@@ -4,6 +4,7 @@ use crate::api::{streams, types::VideoItem};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io::Read;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
 pub const MAX_AHEAD: u8 = 5;
