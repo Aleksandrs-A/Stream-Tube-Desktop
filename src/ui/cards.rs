@@ -3,7 +3,7 @@ use super::*;
 use crate::i18n::{t, tf};
 use crate::api::types::*;
 use crate::store;
-use crate::ui::app::{MenuItem, Route, navigate, open_menu};
+use crate::ui::app::{MenuItem, Route, navigate, open_in_new_tab, open_menu};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -240,6 +240,17 @@ fn watch_route(v: &VideoItem) -> Route {
     Route::Watch { id: v.id.clone(), playlist: None, start: None }
 }
 
+fn middle_click_tab(route: Route) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    move |event, window, cx| {
+        if let ClickEvent::Mouse(click) = event {
+            if click.down.button == MouseButton::Middle && click.up.button == MouseButton::Middle {
+                cx.stop_propagation();
+                open_in_new_tab(route.clone(), false, window, cx);
+            }
+        }
+    }
+}
+
 // ───────────────────────── grid card (home / subscriptions / channel) ─────────────────────────
 
 /// Starts resolving a video's streams when the pointer rests on its thumbnail,
@@ -274,6 +285,7 @@ pub fn video_card(v: &VideoItem, width: Pixels, show_channel: bool, cx: &mut App
         .gap_3()
         .cursor_pointer()
         .group("card")
+        .on_aux_click(middle_click_tab(route.clone()))
         .on_click(move |_, window, cx| navigate(route.clone(), window, cx))
         .child(thumbnail(v, thumb, width, h, px(12.), cx))
         .child(
@@ -338,7 +350,11 @@ pub fn video_card(v: &VideoItem, width: Pixels, show_channel: bool, cx: &mut App
 pub fn shorts_card(v: &VideoItem, width: Pixels, cx: &mut App) -> AnyElement {
     let p = pal(cx);
     let (title, thumb) = branded(v, cx);
-    let id = v.id.clone();
+    let route = if store::settings_snapshot().shorts_in_player {
+        watch_route(v)
+    } else {
+        Route::Shorts(Some(v.id.clone()))
+    };
     let h = width * (16. / 9.);
     div()
         .id(SharedString::from(format!("sc-{}", v.id)))
@@ -347,14 +363,8 @@ pub fn shorts_card(v: &VideoItem, width: Pixels, cx: &mut App) -> AnyElement {
         .w(width)
         .gap_2()
         .cursor_pointer()
-        .on_click(move |_, window, cx| {
-            let route = if store::settings_snapshot().shorts_in_player {
-                Route::Watch { id: id.clone(), playlist: None, start: None }
-            } else {
-                Route::Shorts(Some(id.clone()))
-            };
-            navigate(route, window, cx)
-        })
+        .on_aux_click(middle_click_tab(route.clone()))
+        .on_click(move |_, window, cx| navigate(route.clone(), window, cx))
         .child(thumbnail(v, thumb, width, h, px(12.), cx))
         .child(
             div()
@@ -389,6 +399,7 @@ pub fn video_row(v: &VideoItem, thumb_w: Pixels, cx: &mut App) -> AnyElement {
         .gap_4()
         .w_full()
         .cursor_pointer()
+        .on_aux_click(middle_click_tab(route.clone()))
         .on_click(move |_, window, cx| navigate(route.clone(), window, cx))
         .child(thumbnail(v, thumb, thumb_w, thumb_w * (9. / 16.), px(12.), cx))
         .child(
@@ -456,6 +467,7 @@ pub fn compact_row(v: &VideoItem, active: bool, on_click: Option<Arc<dyn Fn(&mut
         .cursor_pointer()
         .when(active, |d| d.bg(p.hover))
         .hover(move |s| s.bg(p.surface))
+        .on_aux_click(middle_click_tab(route.clone()))
         .on_click(move |_, window, cx| match &on_click {
             Some(f) => f(window, cx),
             None => navigate(route.clone(), window, cx),
