@@ -65,6 +65,62 @@ const COLLAPSED_SIDEBAR_WIDTH: f32 = 88.0;
 pub struct AppHandle(pub WeakEntity<AppView>);
 impl Global for AppHandle {}
 
+fn shortcut_key(key: &str) -> &str {
+    // Match the US key positions when the platform reports Russian characters.
+    match key {
+        "ф" | "Ф" => "a",
+        "и" | "И" => "b",
+        "с" | "С" => "c",
+        "в" | "В" => "d",
+        "у" | "У" => "e",
+        "а" | "А" => "f",
+        "п" | "П" => "g",
+        "р" | "Р" => "h",
+        "ш" | "Ш" => "i",
+        "о" | "О" => "j",
+        "л" | "Л" => "k",
+        "д" | "Д" => "l",
+        "ь" | "Ь" => "m",
+        "т" | "Т" => "n",
+        "щ" | "Щ" => "o",
+        "з" | "З" => "p",
+        "й" | "Й" => "q",
+        "к" | "К" => "r",
+        "ы" | "Ы" => "s",
+        "е" | "Е" => "t",
+        "г" | "Г" => "u",
+        "м" | "М" => "v",
+        "ц" | "Ц" => "w",
+        "ч" | "Ч" => "x",
+        "н" | "Н" => "y",
+        "я" | "Я" => "z",
+        "б" => ",",
+        "Б" => "<",
+        "ю" => ".",
+        "Ю" => ">",
+        "э" => "'",
+        "Э" => "\"",
+        _ => key,
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::shortcut_key;
+
+    #[::core::prelude::v1::test]
+    fn accepts_russian_shortcut_keys() {
+        assert_eq!(shortcut_key("л"), "k");
+        assert_eq!(shortcut_key("Ш"), "i");
+        assert_eq!(shortcut_key("е"), "t");
+        assert_eq!(shortcut_key("б"), ",");
+        assert_eq!(shortcut_key("Ю"), ">");
+        assert_eq!(shortcut_key("э"), "'");
+        assert_eq!(shortcut_key("left"), "left");
+        assert_eq!(shortcut_key("m"), "m");
+    }
+}
+
 /// The page a YouTube (or `streamtube:`) link opens, if it's one we understand.
 pub fn route_from_link(arg: &str) -> Option<Route> {
     let arg = crate::links::normalize(arg);
@@ -1777,7 +1833,7 @@ impl AppView {
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let search_focused = self.search.read(cx).focus_handle(cx).is_focused(window);
         let dialog_focused = self.dialog_input.read(cx).focus_handle(cx).is_focused(window);
-        let k = ev.keystroke.key.as_str();
+        let k = shortcut_key(&ev.keystroke.key);
         let m = &ev.keystroke.modifiers;
         if k == "f5" || (m.control && k == "r" && !search_focused && !dialog_focused) {
             self.refresh(window, cx);
