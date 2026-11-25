@@ -51,6 +51,7 @@ impl Route {
 
 #[derive(Clone, Copy, Default)]
 pub struct UiState {
+    pub shorts: bool,
     pub fullscreen: bool,
     /// fullscreen layout inside the window, without OS fullscreen
     pub windowed: bool,
@@ -1916,7 +1917,7 @@ impl AppView {
         if matches!(self.route, Route::Shorts(_)) {
             if let Some(page) = self.page.clone().downcast::<shorts::ShortsPage>().ok() {
                 if k == "down" || k == "up" {
-                    page.update(cx, |s, cx| s.step(if k == "down" { 1 } else { -1 }, window, cx));
+                    page.update(cx, |s, cx| s.step(if k == "down" { 1 } else { -1 }, cx));
                     return;
                 }
             }
@@ -3122,6 +3123,7 @@ impl Render for AppView {
         let is_watch = matches!(self.route, Route::Watch { .. });
         cx.global_mut::<UiState>().viewport = window.viewport_size();
         let is_shorts = matches!(self.route, Route::Shorts(_));
+        cx.global_mut::<UiState>().shorts = is_shorts;
         let fullscreen = ui.fullscreen && (is_watch || is_shorts);
         let mut root = div()
             .image_cache(self.images.clone())
