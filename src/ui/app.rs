@@ -3327,21 +3327,43 @@ fn build_page(route: &Route, window: &mut Window, cx: &mut App) -> AnyView {
     }
 }
 
-/// Shows a file selected in the system file manager.
+/// Shows a download in the system file manager.
 pub fn reveal_in_folder(path: &str, cx: &mut App) {
-    if !std::path::Path::new(path).exists() {
+    let path = std::path::Path::new(path);
+    if !path.exists() {
         toast(cx, t("File not found (moved or deleted)"));
         return;
     }
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn();
+    if path.is_dir() {
+        let _ = open::that(path);
+        return;
     }
-    #[cfg(not(windows))]
-    {
-        if let Some(d) = std::path::Path::new(path).parent() {
-            let _ = open::that(d);
+    #[cfg(windows)]
+    if select_in_explorer(path) {
+        return;
+    }
+    if let Some(folder) = path.parent() {
+        let _ = open::that(folder);
+    }
+}
+
+#[cfg(windows)]
+fn select_in_explorer(path: &std::path::Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+    use windows::core::PCWSTR;
+
+    let Ok(path) = std::path::absolute(path) else { return false };
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    // GPUI initializes COM on the UI thread before handling clicks.
+    unsafe {
+        let item = ILCreateFromPathW(PCWSTR(wide.as_ptr()));
+        if item.is_null() {
+            return false;
         }
+        let result = SHOpenFolderAndSelectItems(item, None, 0);
+        ILFree(Some(item));
+        result.is_ok()
     }
 }
 
