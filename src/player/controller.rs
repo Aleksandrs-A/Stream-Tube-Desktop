@@ -18,6 +18,12 @@ pub enum PlayerEvent {
     Ambient,
 }
 
+#[derive(Clone, Copy)]
+pub enum KeyboardFeedback {
+    Volume(f64),
+    Seek(f64),
+}
+
 pub struct Player {
     /// speed to go back to while a press-and-hold plays at 2x
     pub boost: Option<f64>,
@@ -39,6 +45,7 @@ pub struct Player {
     pub volume: f64,
     pub muted: bool,
     pub speed: f64,
+    keyboard_feedback: Option<(KeyboardFeedback, Task<()>)>,
     pub eof: bool,
     pub frame: Option<Arc<RenderImage>>,
     old_frames: Vec<Arc<RenderImage>>,
@@ -128,6 +135,7 @@ impl Player {
             muted: false,
             speed: s.default_speed,
             boost: None,
+            keyboard_feedback: None,
             eof: false,
             frame: None,
             old_frames: Vec::new(),
@@ -528,6 +536,7 @@ impl Player {
     }
 
     pub fn play(&mut self, video: VideoItem, start: Option<f64>, cx: &mut Context<Self>) {
+        self.keyboard_feedback = None;
         self.set_playback_ready(false, cx);
         self.save_progress(true);
         if let Some(prev) = &self.video {
@@ -1022,7 +1031,7 @@ impl Player {
     }
 
     pub fn seek_to(&mut self, t: f64) {
-        let t = if self.duration > 0.0 { t.clamp(0.0, self.duration - 0.1) } else { t.max(0.0) };
+        let t = if self.duration > 0.0 { t.clamp(0.0, (self.duration - 0.1).max(0.0)) } else { t.max(0.0) };
         self.time = t;
         if let Some(m) = &self.mpv {
             let _ = m.command(&["seek", &format!("{t}"), "absolute+exact"]);
@@ -1032,6 +1041,21 @@ impl Player {
     pub fn seek_by(&mut self, d: f64) {
         let t = self.time + d;
         self.seek_to(t);
+    }
+
+    pub fn keyboard_feedback(&self) -> Option<KeyboardFeedback> {
+        self.keyboard_feedback.as_ref().map(|(feedback, _)| *feedback)
+    }
+
+    pub fn show_keyboard_feedback(&mut self, feedback: KeyboardFeedback, cx: &mut Context<Self>) {
+        let hide = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(900)).await;
+            let _ = this.update(cx, |player, cx| {
+                player.keyboard_feedback = None;
+                cx.notify();
+            });
+        });
+        self.keyboard_feedback = Some((feedback, hide));
     }
 
     pub fn set_volume(&mut self, v: f64) {
@@ -1116,6 +1140,7 @@ impl Player {
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
+        self.keyboard_feedback = None;
         self.set_playback_ready(false, cx);
         self.save_progress(true);
         if let Some(v) = &self.video {
