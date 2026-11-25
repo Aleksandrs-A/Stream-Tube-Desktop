@@ -228,6 +228,10 @@ pub fn sync_watch_route(id: String, cx: &mut App) {
     }
 }
 
+pub fn is_current_page(page: EntityId, cx: &App) -> bool {
+    cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()).is_some_and(|app| app.read(cx).page.entity_id() == page)
+}
+
 pub fn has_autoplay_next(cx: &App) -> bool {
     cx.try_global::<AutoplayNext>().map(|a| a.0.is_some()).unwrap_or(false)
 }
@@ -451,6 +455,9 @@ struct Tab {
     page: Option<AnyView>,
     history: Vec<(Route, AnyView)>,
     forward: Vec<(Route, AnyView)>,
+    /// the queue and position of the video this tab was playing when it was
+    /// left, so coming back resumes it with its queue (one player is shared)
+    playback: Option<(String, Vec<crate::api::types::VideoItem>, Option<usize>, f64)>,
 }
 
 /// At most this many tabs; more would only hold pages nobody looks at.
@@ -658,7 +665,7 @@ impl AppView {
             }
         }
         Self {
-            tabs: vec![Tab { id: 1, route: start.clone(), page: None, history: Vec::new(), forward: Vec::new() }],
+            tabs: vec![Tab { id: 1, route: start.clone(), page: None, history: Vec::new(), forward: Vec::new(), playback: None }],
             active_tab: 0,
             next_tab_id: 2,
             route: start,
@@ -1161,7 +1168,7 @@ impl AppView {
         self.next_tab_id += 1;
         // right after the current tab, like a browser
         let at = self.active_tab + 1;
-        self.tabs.insert(at, Tab { id, route, page: None, history: Vec::new(), forward: Vec::new() });
+        self.tabs.insert(at, Tab { id, route, page: None, history: Vec::new(), forward: Vec::new(), playback: None });
         if switch {
             self.switch_tab(at, window, cx);
         } else {
@@ -1184,6 +1191,13 @@ impl AppView {
         cur.page = Some(self.page.clone());
         cur.history = std::mem::take(&mut self.history);
         cur.forward = std::mem::take(&mut self.forward);
+        cur.playback = match &cur.route {
+            Route::Watch { id, .. } => {
+                let pl = player(cx).read(cx);
+                pl.video.as_ref().filter(|v| &v.id == id).map(|v| (v.id.clone(), pl.queue.clone(), pl.queue_pos, pl.time))
+            }
+            _ => None,
+        };
         // and show the other one
         self.active_tab = index;
         let next = self.tabs[index].clone();
@@ -1194,6 +1208,23 @@ impl AppView {
         // which starts its video (the same as going back to it)
         let playing = player(cx).read(cx).video.as_ref().map(|v| v.id.clone());
         let stale = matches!(&self.route, Route::Watch { id, .. } if playing.as_deref() != Some(id.as_str()));
+        if stale {
+            // put back this tab's queue (the watch page keeps a queue its video is in)
+            // and carry on where it left off
+            if let (Route::Watch { id, start, .. }, Some((vid, queue, pos, time))) = (&mut self.route, next.playback) {
+                if *id == vid {
+                    if queue.iter().any(|v| v.id == vid) {
+                        player(cx).update(cx, |p, _| {
+                            p.queue = queue;
+                            p.queue_pos = pos;
+                        });
+                    }
+                    if time > 1.0 {
+                        *start = Some(time);
+                    }
+                }
+            }
+        }
         self.page = match next.page {
             Some(p) if !stale => p,
             _ => build_page(&self.route.clone(), window, cx),
@@ -3114,6 +3145,9 @@ impl Render for AppView {
                 MouseButton::Navigate(NavigationDirection::Forward),
                 cx.listener(|this, _, window, cx| this.forward(window, cx)),
             );
+        if !is_shorts {
+            crate::player::shorts_preload::clear();
+        }
         let has_slot = matches!(self.route, Route::Watch { .. } | Route::Shorts(_));
         let page_id = self.page.entity_id();
         let page_area = div()
@@ -3148,14 +3182,14 @@ impl Render for AppView {
                         |d, t| d.opacity(0.35 + 0.65 * t),
                     ),
             )
-            .when(has_slot, |d| d.child(crate::ui::slot::SlotFollower::new(cx, self.main_view.clone().into())))
+            .when(has_slot, |d| d.child(crate::ui::pip::main_surface(&self.main_view, cx)))
             // only over a thumbnail drawn on this page (the slot is cleared when a
             // preview stops or moves to another video)
             .when(
                 crate::player::preview::showing(cx).is_some() && cx.global::<crate::player::preview::PreviewSlot>().0.get().is_some(),
                 |d| {
                     let slot = cx.global::<crate::player::preview::PreviewSlot>().0.clone();
-                    d.child(crate::ui::slot::SlotFollower::with_slot(slot, self.preview_view.clone().into()))
+                    d.child(crate::ui::slot::SlotFollower::with_slot(slot, AnyView::from(self.preview_view.clone())))
                 },
             );
         if fullscreen {

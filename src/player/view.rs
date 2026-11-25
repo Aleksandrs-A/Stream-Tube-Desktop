@@ -80,6 +80,13 @@ pub struct PlayerView {
     /// left button held on the video; after a moment it plays at 2x
     press: Option<Instant>,
     press_boosted: bool,
+    /// picture-in-picture: where a left press on the video started; moving
+    /// from there drags the whole window, like a browser's PiP
+    pip_press: Option<Point<Pixels>>,
+    /// the last press moved the PiP window, so its release is not a click
+    pip_moved: bool,
+    /// a window move was just requested; the system echoes it as a press
+    pip_move_echo: bool,
     /// the player's area, for placing annotations over the picture
     area: Rc<Cell<Bounds<Pixels>>>,
     /// the annotation under the pointer (shows a highlight's rollover text)
@@ -109,6 +116,9 @@ impl PlayerView {
             last_click: None,
             press: None,
             press_boosted: false,
+            pip_press: None,
+            pip_moved: false,
+            pip_move_echo: false,
             area: Rc::new(Cell::new(Bounds::default())),
             hover_annotation: None,
             _sub: sub,
@@ -295,10 +305,21 @@ impl Render for PlayerView {
                 }
                 cx.notify();
             }))
-            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
                 // the button was let go somewhere we didn't see
                 if ev.pressed_button != Some(MouseButton::Left) {
                     this.finish_pointer_press(cx);
+                    this.pip_press = None;
+                }
+                // PiP: dragging the picture moves the window
+                if let Some(origin) = this.pip_press.filter(|_| this.drag_seek.is_none() && !this.drag_vol) {
+                    if (ev.position - origin).magnitude() >= 5. {
+                        this.pip_press = None;
+                        this.pip_moved = true;
+                        this.pip_move_echo = true;
+                        crate::ui::pip::begin_window_move(window);
+                        return;
+                    }
                 }
                 // a seek or volume drag whose release we missed (something under
                 // the pointer kept it) ends here, where the button was last held
@@ -356,8 +377,16 @@ impl Render for PlayerView {
                 .inset_0()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        if this.mini || this.pip {
+                    cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                        if this.pip {
+                            if std::mem::take(&mut this.pip_move_echo) {
+                                return;
+                            }
+                            this.pip_moved = false;
+                            this.pip_press = Some(ev.position);
+                            return;
+                        }
+                        if this.mini {
                             return;
                         }
                         let at = Instant::now();
@@ -389,8 +418,9 @@ impl Render for PlayerView {
                     }),
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    // the release that ends a press-and-hold isn't a click
-                    if std::mem::take(&mut this.press_boosted) {
+                    // the release that ends a press-and-hold, or a PiP window move, isn't a click
+                    this.pip_press = None;
+                    if std::mem::take(&mut this.press_boosted) || std::mem::take(&mut this.pip_moved) {
                         return;
                     }
                     if this.zone_seek.take().map(|t| t.elapsed() < Duration::from_millis(800)).unwrap_or(false) {
