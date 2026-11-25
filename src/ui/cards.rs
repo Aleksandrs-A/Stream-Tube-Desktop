@@ -4,6 +4,7 @@ use crate::i18n::{t, tf};
 use crate::api::types::*;
 use crate::store;
 use crate::ui::app::{MenuItem, Route, navigate, open_in_new_tab, open_menu};
+use gpui_kit::component::tooltip::Tooltip;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -240,6 +241,16 @@ fn watch_route(v: &VideoItem) -> Route {
     Route::Watch { id: v.id.clone(), playlist: None, start: None }
 }
 
+fn video_title(title: String) -> Stateful<Div> {
+    let title = SharedString::from(title);
+    let full_title = title.clone();
+    div()
+        .id("video-title")
+        .line_clamp(2)
+        .tooltip(move |window, cx| Tooltip::new(full_title.clone()).max_w(px(420.)).build(window, cx))
+        .child(title)
+}
+
 fn middle_click_tab(route: Route) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
     move |event, window, cx| {
         if let ClickEvent::Mouse(click) = event {
@@ -315,12 +326,10 @@ pub fn video_card(v: &VideoItem, width: Pixels, show_channel: bool, cx: &mut App
                         .min_w_0()
                         .gap_1()
                         .child(
-                            div()
+                            video_title(title)
                                 .text_base()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(p.text)
-                                .line_clamp(2)
-                                .child(title),
+                                .text_color(p.text),
                         )
                         .when(show_channel && !v.channel_name.is_empty(), |d| {
                             let cr = channel_route.clone();
@@ -376,7 +385,7 @@ pub fn shorts_card(v: &VideoItem, width: Pixels, cx: &mut App) -> AnyElement {
                         .flex_col()
                         .flex_1()
                         .min_w_0()
-                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).line_clamp(2).child(title))
+                        .child(video_title(title).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text))
                         .when_some(v.views_text.clone(), |d, vt| d.child(div().text_xs().text_color(p.text2).child(vt))),
                 )
                 .child(more_button(SharedString::from(format!("sm-{}", v.id)), v, cx)),
@@ -413,7 +422,7 @@ pub fn video_row(v: &VideoItem, thumb_w: Pixels, cx: &mut App) -> AnyElement {
                     div()
                         .flex()
                         .gap_2()
-                        .child(div().flex_1().text_lg().text_color(p.text).line_clamp(2).child(title))
+                        .child(video_title(title).flex_1().text_lg().text_color(p.text))
                         .child(more_button(SharedString::from(format!("vrm-{}", v.id)), v, cx)),
                 )
                 .child(div().text_xs().text_color(p.text2).child(meta))
@@ -480,7 +489,7 @@ pub fn compact_row(v: &VideoItem, active: bool, on_click: Option<Arc<dyn Fn(&mut
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).line_clamp(2).child(title))
+                .child(video_title(title).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text))
                 .child(div().text_xs().text_color(p.text2).truncate().child(v.channel_name.clone()))
                 .child(div().text_xs().text_color(p.text2).truncate().child(meta_line(v))),
         )
