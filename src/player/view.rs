@@ -11,6 +11,32 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+fn playback_error_message(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("sign in to confirm") && lower.contains("not a bot") {
+        return "YouTube blocked anonymous playback for this video. Stream Tube uses your sign-in for account features. Try another network.".into();
+    }
+    crate::ui::friendly_error(error)
+}
+
+#[cfg(test)]
+mod playback_error_tests {
+    use super::playback_error_message;
+
+    #[::core::prelude::v1::test]
+    fn explains_youtube_bot_check_errors() {
+        let message = playback_error_message("visionOS: Sign in to confirm you’re not a bot");
+        assert!(message.contains("anonymous playback"));
+        assert!(message.contains("Try another network."));
+    }
+
+    #[::core::prelude::v1::test]
+    fn keeps_unrelated_playback_errors() {
+        let error = "Playback error: invalid parameter";
+        assert_eq!(playback_error_message(error), error);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Menu {
     Main,
@@ -391,7 +417,7 @@ impl Render for PlayerView {
                     .p_6()
                     .bg(hsla(0., 0., 0., 0.85))
                     .child(icon("circle-alert").size_10().text_color(white()))
-                    .child(div().text_color(white()).text_center().max_w(px(560.)).text_sm().child(crate::ui::friendly_error(&e)))
+                    .child(div().text_color(white()).text_center().max_w(px(560.)).text_sm().child(playback_error_message(&e)))
                     .when(!mini, |d| {
                         d.child(
                             div()
