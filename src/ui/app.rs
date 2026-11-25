@@ -455,6 +455,9 @@ struct Tab {
     page: Option<AnyView>,
     history: Vec<(Route, AnyView)>,
     forward: Vec<(Route, AnyView)>,
+    /// the queue and position of the video this tab was playing when it was
+    /// left, so coming back resumes it with its queue (one player is shared)
+    playback: Option<(String, Vec<crate::api::types::VideoItem>, Option<usize>, f64)>,
 }
 
 /// At most this many tabs; more would only hold pages nobody looks at.
@@ -662,7 +665,7 @@ impl AppView {
             }
         }
         Self {
-            tabs: vec![Tab { id: 1, route: start.clone(), page: None, history: Vec::new(), forward: Vec::new() }],
+            tabs: vec![Tab { id: 1, route: start.clone(), page: None, history: Vec::new(), forward: Vec::new(), playback: None }],
             active_tab: 0,
             next_tab_id: 2,
             route: start,
@@ -1165,7 +1168,7 @@ impl AppView {
         self.next_tab_id += 1;
         // right after the current tab, like a browser
         let at = self.active_tab + 1;
-        self.tabs.insert(at, Tab { id, route, page: None, history: Vec::new(), forward: Vec::new() });
+        self.tabs.insert(at, Tab { id, route, page: None, history: Vec::new(), forward: Vec::new(), playback: None });
         if switch {
             self.switch_tab(at, window, cx);
         } else {
@@ -1188,6 +1191,13 @@ impl AppView {
         cur.page = Some(self.page.clone());
         cur.history = std::mem::take(&mut self.history);
         cur.forward = std::mem::take(&mut self.forward);
+        cur.playback = match &cur.route {
+            Route::Watch { id, .. } => {
+                let pl = player(cx).read(cx);
+                pl.video.as_ref().filter(|v| &v.id == id).map(|v| (v.id.clone(), pl.queue.clone(), pl.queue_pos, pl.time))
+            }
+            _ => None,
+        };
         // and show the other one
         self.active_tab = index;
         let next = self.tabs[index].clone();
@@ -1198,6 +1208,23 @@ impl AppView {
         // which starts its video (the same as going back to it)
         let playing = player(cx).read(cx).video.as_ref().map(|v| v.id.clone());
         let stale = matches!(&self.route, Route::Watch { id, .. } if playing.as_deref() != Some(id.as_str()));
+        if stale {
+            // put back this tab's queue (the watch page keeps a queue its video is in)
+            // and carry on where it left off
+            if let (Route::Watch { id, start, .. }, Some((vid, queue, pos, time))) = (&mut self.route, next.playback) {
+                if *id == vid {
+                    if queue.iter().any(|v| v.id == vid) {
+                        player(cx).update(cx, |p, _| {
+                            p.queue = queue;
+                            p.queue_pos = pos;
+                        });
+                    }
+                    if time > 1.0 {
+                        *start = Some(time);
+                    }
+                }
+            }
+        }
         self.page = match next.page {
             Some(p) if !stale => p,
             _ => build_page(&self.route.clone(), window, cx),
