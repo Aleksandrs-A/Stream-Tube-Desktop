@@ -2025,7 +2025,7 @@ impl AppView {
             )
             // only the empty gaps move the window: gpui reports the first matching control
             // area, so a drag area around the buttons would swallow their clicks
-            .child(drag_gap("drag-l"))
+            .child(drag_gap("drag-l").flex_1().min_w(px(24.)))
             .child(
                 div()
                     .relative()
@@ -2124,7 +2124,7 @@ impl AppView {
                         )
                     }),
             )
-            .child(drag_gap("drag-r"))
+            .child(drag_gap("drag-r").flex_1().min_w(px(24.)))
             .child(
                 div()
                     .flex()
@@ -2133,7 +2133,7 @@ impl AppView {
                     .child(self.render_dl_button(cx))
                     .child(icon_button("settings", "settings", cx).on_click(cx.listener(|this, _, window, cx| this.go(Route::Settings, window, cx))))
                     .child(self.account_button(cx))
-                    .child(div().id("drag-c").w_3().h(px(56.)).window_control_area(WindowControlArea::Drag))
+                    .child(drag_gap("drag-c").w_3())
                     .child(window_controls(maximized, cx)),
             )
     }
@@ -3054,12 +3054,8 @@ impl Render for AppView {
 
 /// Maximizes, or restores a maximized window.
 pub fn toggle_maximize(window: &mut Window) {
-    if !window.is_maximized() {
-        window.zoom_window();
-        return;
-    }
     #[cfg(windows)]
-    {
+    if window.is_maximized() {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         #[link(name = "user32")]
         unsafe extern "system" {
@@ -3071,7 +3067,9 @@ pub fn toggle_maximize(window: &mut Window) {
                 unsafe { ShowWindowAsync(w.hwnd.get(), SW_RESTORE) };
             }
         }
+        return;
     }
+    window.zoom_window();
 }
 
 /// Release notes without their "Download" section (the app installs the update itself).
@@ -3111,8 +3109,19 @@ pub fn restore_window(window: &mut Window) {
 }
 
 /// Empty top-bar space that moves the window (with snap and double-click maximize).
-fn drag_gap(id: &'static str) -> impl IntoElement {
-    div().id(id).flex_1().min_w(px(24.)).h(px(56.)).window_control_area(WindowControlArea::Drag)
+fn drag_gap(id: &'static str) -> Stateful<Div> {
+    let gap = div().id(id).h(px(56.)).window_control_area(WindowControlArea::Drag);
+    // Wayland and X11 require an explicit move request from the mouse press.
+    #[cfg(target_os = "linux")]
+    let gap = gap.on_mouse_down(MouseButton::Left, |event, window, cx| {
+        cx.stop_propagation();
+        if event.click_count == 2 {
+            toggle_maximize(window);
+        } else {
+            window.start_window_move();
+        }
+    });
+    gap
 }
 
 /// Minimize / maximize / close, drawn in the top bar. The OS handles the clicks
