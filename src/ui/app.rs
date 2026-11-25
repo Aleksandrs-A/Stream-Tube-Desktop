@@ -2073,7 +2073,7 @@ impl AppView {
                             deferred(
                                 div()
                                     .id("suggestions")
-                                    .occlude()
+                                    .when(cfg!(target_os = "linux"), |d| d.occlude())
                                     .absolute()
                                     .top(px(44.))
                                     .left_0()
@@ -3057,8 +3057,12 @@ impl Render for AppView {
 
 /// Maximizes, or restores a maximized window.
 pub fn toggle_maximize(window: &mut Window) {
+    if cfg!(target_os = "linux") || !window.is_maximized() {
+        window.zoom_window();
+        return;
+    }
     #[cfg(windows)]
-    if window.is_maximized() {
+    {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         #[link(name = "user32")]
         unsafe extern "system" {
@@ -3070,9 +3074,7 @@ pub fn toggle_maximize(window: &mut Window) {
                 unsafe { ShowWindowAsync(w.hwnd.get(), SW_RESTORE) };
             }
         }
-        return;
     }
-    window.zoom_window();
 }
 
 /// Release notes without their "Download" section (the app installs the update itself).
