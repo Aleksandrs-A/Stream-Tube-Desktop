@@ -383,6 +383,7 @@
   "Buffer health": "Pufferdauer",
   "Connection speed": "Verbindungsgeschwindigkeit",
   "Buffered data": "Pufferdaten",
+  "Read from Shorts preload": "Aus dem Shorts-Vorladespeicher gelesen",
   "Volume": "Lautstärke",
   "Speed": "Speed",
   "A/V sync": "Audio-Video-Synchronisation",

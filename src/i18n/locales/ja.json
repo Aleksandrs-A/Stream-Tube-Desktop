@@ -383,6 +383,7 @@
   "Buffer health": "バッファーの残り時間",
   "Connection speed": "接続速度",
   "Buffered data": "バッファーデータ",
+  "Read from Shorts preload": "ショートの先読みから読み込んだデータ",
   "Volume": "音量",
   "Speed": "スピード",
   "A/V sync": "音声と映像の同期",

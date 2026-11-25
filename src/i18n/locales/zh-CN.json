@@ -383,6 +383,7 @@
   "Buffer health": "缓冲时长",
   "Connection speed": "连接速度",
   "Buffered data": "缓冲数据",
+  "Read from Shorts preload": "从 Shorts 预加载中读取的数据",
   "Volume": "音量",
   "Speed": "速度",
   "A/V sync": "音视频同步",

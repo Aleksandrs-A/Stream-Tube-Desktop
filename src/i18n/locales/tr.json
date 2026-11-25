@@ -383,6 +383,7 @@
   "Buffer health": "Arabellek durumu",
   "Connection speed": "Bağlantı hızı",
   "Buffered data": "Arabellekteki veri",
+  "Read from Shorts preload": "Shorts ön yüklemesinden okunan veri",
   "Volume": "Ses",
   "Speed": "Hız",
   "A/V sync": "Ses ve görüntü eşitlemesi",
