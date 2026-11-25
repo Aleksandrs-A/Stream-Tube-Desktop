@@ -69,16 +69,33 @@ impl ShortsPage {
             comments_bounds: Default::default(),
             _sub: sub,
         };
-        if let Some(id) = &start {
-            s.list.push(VideoItem { id: id.clone(), is_short: true, thumbnail: innertube::default_thumb(id), ..Default::default() });
+        let cur_playing = player(cx).read(cx).video.clone();
+        let initial_id: Option<String> = if let Some(id) = &start {
+            let item = match cur_playing {
+                Some(mut v) if v.id == *id => {
+                    v.is_short = true;
+                    v
+                }
+                _ => VideoItem { id: id.clone(), is_short: true, thumbnail: innertube::default_thumb(id), ..Default::default() },
+            };
+            s.list.push(item);
             s.play_current(cx);
-        }
-        let start2 = start.clone();
+            Some(id.clone())
+        } else if let Some(mut v) = cur_playing.filter(|v| v.is_short) {
+            let id = v.id.clone();
+            v.is_short = true;
+            s.list.push(v);
+            s.play_current(cx);
+            Some(id)
+        } else {
+            None
+        };
+        let had_initial = initial_id.is_some();
         cx.spawn(async move |this, cx| {
             let res = blocking(move || {
-                // YouTube's own Shorts sequence: the account's recommendations with the
-                // browser sign-in, otherwise one that follows on from the last Short watched
-                let seed = crate::store::history_list("", 60).into_iter().find(|h| h.video.is_short).map(|h| h.video.id);
+                // YouTube's own Shorts sequence: follow on from the opened/playing Short when present,
+                // otherwise the account's recommendations or the last Short watched
+                let seed = initial_id.or_else(|| crate::store::history_list("", 60).into_iter().find(|h| h.video.is_short).map(|h| h.video.id));
                 let seeded = seed.as_deref().and_then(|s| innertube::shorts_feed(None, Some(s)).ok());
                 let feed = seeded.filter(|(i, _)| !i.is_empty()).or_else(|| innertube::shorts_feed(None, None).ok());
                 if let Some((items, cont)) = feed {
@@ -115,7 +132,7 @@ impl ShortsPage {
                 }
                 this.continuation = res.1;
                 this.reel_feed = res.2;
-                if start2.is_none() && !this.list.is_empty() {
+                if !had_initial && !this.list.is_empty() {
                     this.play_current(cx);
                 }
                 cx.notify();
@@ -126,13 +143,21 @@ impl ShortsPage {
     }
 
     fn play_current(&mut self, cx: &mut Context<Self>) {
-        let Some(v) = self.list.get(self.idx).cloned() else { return };
+        let Some(mut v) = self.list.get(self.idx).cloned() else { return };
+        v.is_short = true;
         let pl = player(cx);
         pl.update(cx, |p, cx| {
             p.queue.clear();
             p.queue_pos = None;
             p.set_loop(!store::settings_snapshot().shorts_autoadvance);
-            p.play(v.clone(), Some(0.0), cx);
+            let same_playing = p.video.as_ref().map(|cur| cur.id.as_str()) == Some(v.id.as_str());
+            if same_playing {
+                if let Some(cur) = p.video.as_mut() {
+                    cur.is_short = true;
+                }
+            } else {
+                p.play(v.clone(), Some(0.0), cx);
+            }
         });
         self.fetch_meta(v.id.clone(), cx);
         if let Some(n) = self.list.get(self.idx + 1) {
@@ -597,9 +622,50 @@ impl Render for ShortsPage {
         let p = pal(cx);
         let ui = *cx.global::<UiState>();
         if self.list.is_empty() {
+            crate::ui::slot::clear_slot(cx);
             return div().size_full().child(if self.loading { spinner(cx).into_any_element() } else { empty_state("zap", "No Shorts found", "", cx).into_any_element() }).into_any_element();
         }
         let v = self.list[self.idx].clone();
+        if ui.fullscreen {
+            let h = ui.viewport.height.max(px(240.));
+            let w = (h * (9. / 16.)).min(ui.viewport.width);
+            return div()
+                .id("shorts-fs")
+                .size_full()
+                .bg(black())
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_scroll(cx.listener(|this, ev: &ScrollEvent, window, cx| {
+                    let dy: f32 = ev.delta.pixel_delta(window.line_height()).y.into();
+                    if this.last_wheel.elapsed() > Duration::from_millis(220) {
+                        this.wheel_acc = 0.0;
+                        this.wheel_used = false;
+                    }
+                    this.last_wheel = Instant::now();
+                    if this.wheel_used {
+                        return;
+                    }
+                    this.wheel_acc += dy;
+                    if this.wheel_acc.abs() >= 48.0 {
+                        let d = if this.wheel_acc < 0.0 { 1 } else { -1 };
+                        this.wheel_acc = 0.0;
+                        this.wheel_used = true;
+                        this.last_step = Instant::now() - Duration::from_secs(1);
+                        this.step(d, window, cx);
+                    }
+                }))
+                .child(
+                    div()
+                        .relative()
+                        .w(w)
+                        .h(h)
+                        .overflow_hidden()
+                        .bg(black())
+                        .child(crate::ui::slot::player_slot(cx)),
+                )
+                .into_any_element();
+        }
         let h = (ui.viewport.height - px(56. + 32.)).max(px(400.));
         let w = h * (9. / 16.);
         let votes = self.votes.get(&v.id).cloned();

@@ -1097,12 +1097,14 @@ impl AppView {
         if route == self.route {
             // re-navigating to the same place refreshes it (like clicking Home again)
             if !matches!(route, Route::Watch { .. }) {
+                crate::ui::slot::clear_slot(cx);
                 self.page = build_page(&route, window, cx);
                 cx.notify();
             }
             return;
         }
-        if cx.global::<UiState>().fullscreen && !matches!(route, Route::Watch { .. }) {
+        crate::ui::slot::clear_slot(cx);
+        if cx.global::<UiState>().fullscreen && !matches!(route, Route::Watch { .. } | Route::Shorts(_)) {
             exit_fullscreen(window, cx);
         }
         let page = build_page(&route, window, cx);
@@ -1172,7 +1174,8 @@ impl AppView {
             Some(p) if !stale => p,
             _ => build_page(&self.route.clone(), window, cx),
         };
-        if cx.global::<UiState>().fullscreen && !matches!(self.route, Route::Watch { .. }) {
+        crate::ui::slot::clear_slot(cx);
+        if cx.global::<UiState>().fullscreen && !matches!(self.route, Route::Watch { .. } | Route::Shorts(_)) {
             exit_fullscreen(window, cx);
         }
         window.set_window_title(&format!("{} - Stream Tube", self.route.title()));
@@ -1333,9 +1336,13 @@ impl AppView {
 
     pub fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((r, p)) = self.history.pop() {
+            crate::ui::slot::clear_slot(cx);
             let cur_r = std::mem::replace(&mut self.route, r);
             let cur_p = std::mem::replace(&mut self.page, p);
             self.forward.push((cur_r, cur_p));
+            if cx.global::<UiState>().fullscreen && !matches!(self.route, Route::Watch { .. } | Route::Shorts(_)) {
+                toggle_fullscreen(window, cx);
+            }
             // If we return to a watch page for a different video than is playing, rebuild it
             if let Route::Watch { id, .. } = &self.route {
                 let playing = player(cx).read(cx).video.as_ref().map(|v| v.id.clone());
@@ -1350,9 +1357,13 @@ impl AppView {
 
     pub fn forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((r, p)) = self.forward.pop() {
+            crate::ui::slot::clear_slot(cx);
             let cur_r = std::mem::replace(&mut self.route, r);
             let cur_p = std::mem::replace(&mut self.page, p);
             self.history.push((cur_r, cur_p));
+            if cx.global::<UiState>().fullscreen && !matches!(self.route, Route::Watch { .. } | Route::Shorts(_)) {
+                toggle_fullscreen(window, cx);
+            }
             window.set_window_title(&format!("{} - Stream Tube", self.route.title()));
             cx.notify();
         }
@@ -1998,14 +2009,19 @@ impl AppView {
             ("'", _) => toggle_windowed_fullscreen(window, cx),
             ("t", false) => toggle_theater_mode(cx),
             ("i", false) => {
-                if matches!(self.route, Route::Watch { .. }) {
+                if matches!(self.route, Route::Watch { .. } | Route::Shorts(_)) {
                     if self.history.is_empty() {
                         self.go(Route::Home, window, cx);
                     } else {
                         self.back(window, cx);
                     }
                 } else if let Some(v) = p.read(cx).video.clone() {
-                    self.go(Route::Watch { id: v.id, playlist: None, start: None }, window, cx);
+                    let route = if v.is_short && !store::settings_snapshot().shorts_in_player {
+                        Route::Shorts(Some(v.id))
+                    } else {
+                        Route::Watch { id: v.id, playlist: None, start: None }
+                    };
+                    self.go(route, window, cx);
                 }
             }
             ("n", true) => play_next(window, cx),
@@ -2411,6 +2427,7 @@ impl AppView {
             return None;
         }
         let id = video.id.clone();
+        let is_short = video.is_short;
         let (right, bottom, w) = self.mini_geom;
         let h = w * 9.0 / 16.0;
         let start = |resize: bool| {
@@ -2448,7 +2465,12 @@ impl AppView {
                             if std::mem::take(&mut this.mini_dragged) {
                                 return;
                             }
-                            this.go(Route::Watch { id: id.clone(), playlist: None, start: None }, window, cx)
+                            let route = if is_short && !store::settings_snapshot().shorts_in_player {
+                                Route::Shorts(Some(id.clone()))
+                            } else {
+                                Route::Watch { id: id.clone(), playlist: None, start: None }
+                            };
+                            this.go(route, window, cx)
                         }))
                         .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).truncate().child(video.title.clone()))
                         .child(div().text_xs().text_color(p.text2).truncate().child(video.channel_name.clone())),
@@ -3016,7 +3038,8 @@ impl Render for AppView {
             u.viewport = vp;
             u.content_width = vp.width - px(sidebar_w) - px(48.);
         }
-        let fullscreen = ui.fullscreen && is_watch;
+        let is_shorts = matches!(self.route, Route::Shorts(_));
+        let fullscreen = ui.fullscreen && (is_watch || is_shorts);
         let mut root = div()
             .image_cache(self.images.clone())
             .id("app-root")

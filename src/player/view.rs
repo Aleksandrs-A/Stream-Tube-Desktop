@@ -734,7 +734,12 @@ fn context_items(player: &Entity<Player>, cx: &App) -> Vec<crate::ui::app::MenuI
 
 fn navigate_to_current(this: &mut PlayerView, window: &mut Window, cx: &mut Context<PlayerView>) {
     if let Some(v) = this.player.read(cx).video.clone() {
-        navigate(Route::Watch { id: v.id, playlist: None, start: None }, window, cx);
+        let route = if v.is_short && !store::settings_snapshot().shorts_in_player {
+            Route::Shorts(Some(v.id))
+        } else {
+            Route::Watch { id: v.id, playlist: None, start: None }
+        };
+        navigate(route, window, cx);
     }
 }
 
