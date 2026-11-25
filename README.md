@@ -68,10 +68,11 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Hold Space or press and hold the main video to play at 2x
 - Hover previews: rest the pointer on a thumbnail and it plays inside it, muted, with a seek bar to skip around
 - Most replayed graph with "jump ahead", ambient glow around the player (on or off from the player's gear menu), force original audio instead of auto-dubbing
+- Aspect ratio controls for ultrawide screens, like the Ultrawidify extension: *Auto* finds a film's black bars and crops them away so it fills a 21:9 or 32:9 monitor, or pick 21:9, 18:9 or 32:9, *Zoom to fill* or *Stretch*. Choose it from the player's gear menu or *Settings → Player*, or press *Z* to cycle
 - A screenshot button in the player bar
 - Comments sorted by Top, Timed or Newest. *Timed* works like youtube.com: comments that mention a moment of the video appear as playback reaches it
 - Comments show animated GIFs, stickers and channel emojis, and replies are drawn as threads, with answers to a reply nested under it. Long comments and channel descriptions are shortened with *Read more* / *Show more*
-- Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous, and Ctrl+←/→ for the previous/next chapter)
+- Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous, Z for the aspect ratio, and Ctrl+←/→ for the previous/next chapter)
 - "Open in external player" with no setup: it uses VLC or mpv if one is installed, otherwise your default video player, and continues from where you were
 - Right-click the video for loop, copy link (optionally at the current time), screenshot and **Stats for nerds**: resolution, codecs, dropped frames, hardware decoding, bitrate, buffer health and connection speed, updated live (also *Shift+I*)
 
@@ -183,21 +184,21 @@ Windows doesn't have one.
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.7.3-alpha_amd64.deb
+sudo apt install ./streamtube_0.7.4-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.7.3-alpha.x86_64.rpm
+sudo dnf install ./streamtube-0.7.4-alpha.x86_64.rpm
 ```
 
 **Any Linux (x86_64), nothing to install**: download the AppImage, make it executable
 and run it. libmpv is inside, so video plays without installing anything else:
 
 ```sh
-chmod +x StreamTube-0.7.3-alpha-x86_64.AppImage
-./StreamTube-0.7.3-alpha-x86_64.AppImage
+chmod +x StreamTube-0.7.4-alpha-x86_64.AppImage
+./StreamTube-0.7.4-alpha-x86_64.AppImage
 ```
 
 **Other Linux (x86_64), installed for your user**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
@@ -239,11 +240,11 @@ and each file has a signed build provenance attestation that ties it to the work
 run that built it. With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify StreamTube-0.7.3-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
+gh attestation verify StreamTube-0.7.4-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
 ```
 
-Releases are immutable once published, so their files can't be swapped afterwards.
-The in-app updater also checks the installer's SHA-256 before running it.
+Check a download against those before running it. The in-app updater also checks
+the installer's SHA-256 before running it.
 
 ## Building
 
@@ -271,7 +272,7 @@ else, copy `libmpv-2.dll` next to it.
 To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.7.3-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.7.4-alpha installer\streamtube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in
@@ -375,6 +376,9 @@ Stream Tube leans on a lot of other people's work:
 [Return YouTube Dislike](https://returnyoutubedislike.com),
 [GPUI](https://www.gpui.rs), [FFmpeg](https://ffmpeg.org) and the annotation archive saved by
 [Archive Team](https://wiki.archiveteam.org/index.php/YouTube/Annotations).
+
+Thanks also to everyone who has sent fixes and features; each release's notes name
+who did what, and the full list is on the [contributors page](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/graphs/contributors).
 
 It's an independent project and isn't affiliated with or endorsed by YouTube or Google.
 

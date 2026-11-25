@@ -115,6 +115,7 @@ pub struct Settings {
     pub ambient_mode: bool,
     pub shorts_in_player: bool,
     pub shorts_autoadvance: bool,
+    pub shorts_preload: u8,
     pub shorts_yt_layout: bool,
     pub shorts_edge_nav: bool,
     pub shorts_show_subscribe: bool,
@@ -129,6 +130,8 @@ pub struct Settings {
     pub hover_preview: bool,
     /// show archived annotations (notes and links YouTube removed in 2019)
     pub annotations: bool,
+    /// crop or zoom of the picture, a value of `player::aspect::MODES` ("original", "auto", "21:9"...)
+    pub aspect_mode: String,
     /// keep page scrollbars on screen instead of showing them on hover
     pub always_scrollbars: bool,
 }
@@ -176,6 +179,7 @@ impl Default for Settings {
             sb_min_duration: 0.0,
             sb_notify: true,
             annotations: true,
+            aspect_mode: "original".into(),
             always_scrollbars: false,
             dearrow_titles: false,
             dearrow_thumbnails: false,
@@ -227,6 +231,7 @@ impl Default for Settings {
             ambient_mode: true,
             shorts_in_player: false,
             shorts_autoadvance: false,
+            shorts_preload: 1,
             shorts_yt_layout: false,
             shorts_edge_nav: true,
             shorts_show_subscribe: true,

@@ -603,10 +603,13 @@ pub fn shorts_feed(token: Option<&str>, seed: Option<&str>) -> Result<(Vec<Video
         None => {
             let body = json!({ "params": "CA8%3D", "disablePlayerResponse": true, "inputType": "REEL_WATCH_INPUT_TYPE_SEEDLESS" });
             let r = call("reel/reel_item_watch", body)?;
-            if let Some(id) = r.pointer("/replacementEndpoint/reelWatchEndpoint/videoId").and_then(Value::as_str) {
-                ids.push(id.to_string());
+            let token = r.get("sequenceContinuation").and_then(Value::as_str).ok_or_else(|| anyhow!("no shorts sequence"))?.to_owned();
+            if let Some(id) = r.pointer("/replacementEndpoint/reelWatchEndpoint/videoId").and_then(Value::as_str).filter(|id| !id.is_empty()) {
+                // The seed is already playable. The page can request the sequence after showing it.
+                let first = VideoItem { id: id.to_owned(), thumbnail: default_thumb(id), is_short: true, ..Default::default() };
+                return Ok((vec![first], Some(token)));
             }
-            r.get("sequenceContinuation").and_then(Value::as_str).ok_or_else(|| anyhow!("no shorts sequence"))?.to_string()
+            token
         }
     };
     let s = call("reel/reel_watch_sequence", json!({ "sequenceParams": seq }))?;
@@ -743,12 +746,17 @@ pub fn parse_youtube_url(input: &str) -> Option<ResolvedUrl> {
     if let Some(v) = get_param("v").filter(|v| is_id(v)) {
         return Some(ResolvedUrl::Video(v));
     }
-    if let Some(l) = get_param("list") {
+    // links can come from any web page (streamtube: links), so only take IDs
+    // made of the characters YouTube uses
+    let is_list_id = |x: &str| (2..=64).contains(&x.len()) && x.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if let Some(l) = get_param("list").filter(|l| is_list_id(l)) {
         return Some(ResolvedUrl::Playlist(l));
     }
     if let Some(rest) = s.split("/channel/").nth(1) {
-        let id: String = rest.chars().take_while(|c| *c != '/' && *c != '?').collect();
-        return Some(ResolvedUrl::Channel(id));
+        let id: String = rest.chars().take_while(|c| *c != '/' && *c != '?' && *c != '#').collect();
+        if id.starts_with("UC") && is_list_id(&id) {
+            return Some(ResolvedUrl::Channel(id));
+        }
     }
     None
 }

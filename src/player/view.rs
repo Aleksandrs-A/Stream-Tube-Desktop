@@ -1,4 +1,5 @@
 //! Video surface + YouTube-style controls.
+use super::aspect;
 use super::controller::{Player, VideoImage};
 use crate::i18n::{t as translate, tf};
 use crate::api::json::format_duration;
@@ -54,6 +55,7 @@ enum Menu {
     Speed,
     Captions,
     Audio,
+    Aspect,
 }
 
 pub struct PlayerView {
@@ -81,6 +83,13 @@ pub struct PlayerView {
     /// left button held on the video; after a moment it plays at 2x
     press: Option<Instant>,
     press_boosted: bool,
+    /// picture-in-picture: where a left press on the video started; moving
+    /// from there drags the whole window, like a browser's PiP
+    pip_press: Option<Point<Pixels>>,
+    /// the last press moved the PiP window, so its release is not a click
+    pip_moved: bool,
+    /// a window move was just requested; the system echoes it as a press
+    pip_move_echo: bool,
     /// the player's area, for placing annotations over the picture
     area: Rc<Cell<Bounds<Pixels>>>,
     /// the annotation under the pointer (shows a highlight's rollover text)
@@ -110,6 +119,9 @@ impl PlayerView {
             last_click: None,
             press: None,
             press_boosted: false,
+            pip_press: None,
+            pip_moved: false,
+            pip_move_echo: false,
             area: Rc::new(Cell::new(Bounds::default())),
             hover_annotation: None,
             _sub: sub,
@@ -174,6 +186,12 @@ fn hide_pointer_until_moved() {
     }
 }
 
+/// Saves the aspect mode (a value of `aspect::MODES`) and redraws every player with it.
+pub fn set_aspect_mode(value: &str, cx: &mut App) {
+    store::update_settings(|s| s.aspect_mode = value.to_string());
+    cx.refresh_windows();
+}
+
 fn speed_label(s: f64) -> String {
     if (s - 1.0).abs() < 0.001 { translate("Normal").into() } else { format!("{s}") }
 }
@@ -197,6 +215,12 @@ impl Render for PlayerView {
         let show = self.controls_visible(paused) || mini && self.hovering;
         let scale = window.scale_factor();
         let view = cx.entity().downgrade();
+        let aspect = aspect::Mode::parse(&store::settings_snapshot().aspect_mode);
+        let auto_trim = pl.auto_crop.trim;
+        let picture = match frame.clone().filter(|_| !audio_only) {
+            Some(VideoImage::Image(f)) => Some(f),
+            _ => None,
+        };
 
         // ── video surface ──
         let surface = div()
@@ -220,7 +244,17 @@ impl Render for PlayerView {
                             }
                         }
                     },
-                    move |_, _, window, _| {
+                    move |bounds, _, window, _| {
+                        // the frame, cropped / zoomed for the aspect mode; what falls
+                        // outside the player is clipped by paint_image
+                        if let Some(f) = picture {
+                            let dims = f.size(0);
+                            let fsize = (i32::from(dims.width) as f32, i32::from(dims.height) as f32);
+                            let (region, fit) = aspect::resolve(aspect, fsize, (vsize.0 as f32, vsize.1 as f32), auto_trim);
+                            let (x, y, w, h) = aspect::layout((f32::from(bounds.size.width), f32::from(bounds.size.height)), fsize, region, fit);
+                            let image = Bounds::new(bounds.origin + point(px(x), px(y)), size(px(w), px(h)));
+                            let _ = window.paint_image(bounds, image, Corners::default(), f, 0, false);
+                        }
                         window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                             if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
                                 let _ = view.update(cx, |view, cx| view.finish_pointer_press(cx));
@@ -231,9 +265,9 @@ impl Render for PlayerView {
                 .absolute()
                 .size_full(),
             )
+            // GL path: the IOSurface goes straight to GPUI's Metal renderer (no aspect modes)
             .when_some(frame.filter(|_| !audio_only), |d, f| match f {
-                VideoImage::Image(f) => d.child(img(ImageSource::Render(f)).absolute().size_full().object_fit(ObjectFit::Contain)),
-                // GL path: the IOSurface goes straight to GPUI's Metal renderer
+                VideoImage::Image(_) => d,
                 #[cfg(target_os = "macos")]
                 VideoImage::Surface(s) => d.child(gpui_kit::surface(s.0).absolute().size_full().object_fit(ObjectFit::Contain)),
             })
@@ -282,10 +316,21 @@ impl Render for PlayerView {
                 }
                 cx.notify();
             }))
-            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
                 // the button was let go somewhere we didn't see
                 if ev.pressed_button != Some(MouseButton::Left) {
                     this.finish_pointer_press(cx);
+                    this.pip_press = None;
+                }
+                // PiP: dragging the picture moves the window
+                if let Some(origin) = this.pip_press.filter(|_| this.drag_seek.is_none() && !this.drag_vol) {
+                    if (ev.position - origin).magnitude() >= 5. {
+                        this.pip_press = None;
+                        this.pip_moved = true;
+                        this.pip_move_echo = true;
+                        crate::ui::pip::begin_window_move(window);
+                        return;
+                    }
                 }
                 // a seek or volume drag whose release we missed (something under
                 // the pointer kept it) ends here, where the button was last held
@@ -343,8 +388,16 @@ impl Render for PlayerView {
                 .inset_0()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        if this.mini || this.pip {
+                    cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                        if this.pip {
+                            if std::mem::take(&mut this.pip_move_echo) {
+                                return;
+                            }
+                            this.pip_moved = false;
+                            this.pip_press = Some(ev.position);
+                            return;
+                        }
+                        if this.mini {
                             return;
                         }
                         let at = Instant::now();
@@ -376,8 +429,9 @@ impl Render for PlayerView {
                     }),
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    // the release that ends a press-and-hold isn't a click
-                    if std::mem::take(&mut this.press_boosted) {
+                    // the release that ends a press-and-hold, or a PiP window move, isn't a click
+                    this.pip_press = None;
+                    if std::mem::take(&mut this.press_boosted) || std::mem::take(&mut this.pip_moved) {
                         return;
                     }
                     if this.zone_seek.take().map(|t| t.elapsed() < Duration::from_millis(800)).unwrap_or(false) {
@@ -602,11 +656,21 @@ impl PlayerView {
         }
         let area = self.area.get();
         let (aw, ah) = (f32::from(area.size.width), f32::from(area.size.height));
-        // the picture inside the player, as mpv draws it (fit, centered)
-        let (vw, vh) = if vsize.0 > 0.0 && vsize.1 > 0.0 { (vsize.0 as f32, vsize.1 as f32) } else { (16.0, 9.0) };
-        let k = (aw / vw).min(ah / vh);
-        let (pw, ph) = (vw * k, vh * k);
-        let (ox, oy) = ((aw - pw) / 2.0, (ah - ph) / 2.0);
+        // the picture inside the player, placed as the surface draws it (cropped or zoomed for the aspect mode)
+        let video = if vsize.0 > 0.0 && vsize.1 > 0.0 { (vsize.0 as f32, vsize.1 as f32) } else { (16.0, 9.0) };
+        let (fsize, trim) = {
+            let pl = self.player.read(cx);
+            let dims = match pl.frame.as_ref() {
+                Some(VideoImage::Image(f)) => Some(f.size(0)),
+                _ => None,
+            };
+            (dims.map(|d| (i32::from(d.width) as f32, i32::from(d.height) as f32)).unwrap_or(video), pl.auto_crop.trim)
+        };
+        let mode = aspect::Mode::parse(&store::settings_snapshot().aspect_mode);
+        let (region, fit) = aspect::resolve(mode, fsize, video, trim);
+        let (ix, iy, iw, ih) = aspect::layout((aw, ah), fsize, region, fit);
+        let pic = aspect::picture_region(fsize, video);
+        let (ox, oy, pw, ph) = (ix + pic.x * iw, iy + pic.y * ih, pic.w * iw, pic.h * ih);
         let hovered = self.hover_annotation.clone();
         let rgba = |c: u32, a: f32| {
             let mut c = rgb(c);
@@ -1476,6 +1540,10 @@ impl PlayerView {
                         let cur = pl.audio_track.clone().unwrap_or_else(|| translate("Default").into());
                         d.child(row("m-a".into(), Some("languages"), translate("Audio track").into(), Some(cur), false).on_click(cx.listener(|t, _, _, cx| { t.menu = Some(Menu::Audio); cx.notify() })))
                     })
+                    .when(!audio_only, |d| {
+                        let cur = translate(aspect::label(&store::settings_snapshot().aspect_mode)).to_string();
+                        d.child(row("m-ar".into(), Some("ratio"), translate("Aspect ratio").into(), Some(cur), false).on_click(cx.listener(|t, _, _, cx| { t.menu = Some(Menu::Aspect); cx.notify() })))
+                    })
                     .child(
                         row("m-ao".into(), Some("headphones"), translate("Audio only (background)").into(), Some(translate(if audio_only { "On" } else { "Off" }).into()), false)
                             .on_click(cx.listener(move |t, _, _, cx| t.player.update(cx, |p, cx| p.set_audio_only(!audio_only, cx)))),
@@ -1606,6 +1674,16 @@ impl PlayerView {
                             this.player.update(cx, |p, cx| p.set_audio_track(Some(t3), cx));
                         })),
                     );
+                }
+            }
+            Menu::Aspect => {
+                let cur = store::settings_snapshot().aspect_mode.clone();
+                panel = panel.child(header("Aspect ratio", cx));
+                for &(value, label) in aspect::MODES {
+                    panel = panel.child(row(SharedString::from(format!("ar-{value}")), None, translate(label).into(), None, cur == value).on_click(cx.listener(move |t, _, _, cx| {
+                        t.menu = None;
+                        set_aspect_mode(value, cx);
+                    })));
                 }
             }
         }
