@@ -1,5 +1,6 @@
 //! Application shell: routing, top bar, sidebar, overlays, keyboard shortcuts.
 use super::pages::*;
+use crate::i18n::{t, tf};
 use super::*;
 use crate::api::innertube;
 use crate::api::types::VideoItem;
@@ -31,19 +32,19 @@ pub enum Route {
 impl Route {
     fn title(&self) -> String {
         match self {
-            Route::Home => "Home".into(),
-            Route::Explore(i) => innertube::EXPLORE.get(*i).map(|e| e.0.to_string()).unwrap_or_default(),
+            Route::Home => t("Home").into(),
+            Route::Explore(i) => innertube::EXPLORE.get(*i).map(|e| t(e.0).to_string()).unwrap_or_default(),
             Route::Shorts(_) => "Shorts".into(),
-            Route::Subscriptions => "Subscriptions".into(),
-            Route::Channels => "Channels".into(),
-            Route::History => "History".into(),
-            Route::Library => "Playlists".into(),
-            Route::LocalPlaylist(_) | Route::Playlist(_) => "Playlist".into(),
+            Route::Subscriptions => t("Subscriptions").into(),
+            Route::Channels => t("Channels").into(),
+            Route::History => t("History").into(),
+            Route::Library => t("Playlists").into(),
+            Route::LocalPlaylist(_) | Route::Playlist(_) => t("Playlist").into(),
             Route::Search(q) => q.clone(),
-            Route::Channel(_) => "Channel".into(),
-            Route::Watch { .. } => "Watch".into(),
-            Route::Settings => "Settings".into(),
-            Route::Downloads => "Downloads".into(),
+            Route::Channel(_) => t("Channel").into(),
+            Route::Watch { .. } => t("Watch").into(),
+            Route::Settings => t("Settings").into(),
+            Route::Downloads => t("Downloads").into(),
         }
     }
 }
@@ -351,7 +352,7 @@ pub fn import_web_cookies(cx: &mut App) {
                 });
             }
             match res {
-                Ok(name) => toast(cx, format!("Connected as {name}. What you watch now shows in your YouTube history.")),
+                Ok(name) => toast(cx, tf!("Connected as {0}. What you watch now shows in your YouTube history.", name)),
                 Err(e) => toast(cx, crate::ui::friendly_error(&format!("{e:#}"))),
             }
             cx.refresh_windows();
@@ -362,7 +363,7 @@ pub fn import_web_cookies(cx: &mut App) {
 
 pub fn disconnect_web(cx: &mut App) {
     crate::api::web::disconnect();
-    toast(cx, "Browser sign-in disconnected");
+    toast(cx, t("Browser sign-in disconnected"));
     cx.refresh_windows();
 }
 
@@ -374,7 +375,7 @@ pub fn open_sign_in(_window: &mut Window, cx: &mut App) {
 
 pub fn sign_out(cx: &mut App) {
     crate::api::auth::sign_out();
-    toast(cx, "Signed out");
+    toast(cx, t("Signed out"));
     if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
         app.update(cx, |a, cx| {
             a.reload_page = true;
@@ -391,7 +392,8 @@ pub fn open_dialog(d: Dialog, window: &mut Window, cx: &mut App) {
     if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
         app.update(cx, |a, cx| {
             a.dialog_input.update(cx, |i, cx| i.set_value("", window, cx));
-            if let Dialog::TextPrompt { .. } = &d {
+            if let Dialog::TextPrompt { placeholder, .. } = &d {
+                a.dialog_input.update(cx, |input, cx| input.set_placeholder(t(placeholder).to_string(), window, cx));
                 let fh = a.dialog_input.read(cx).focus_handle(cx);
                 window.focus(&fh, cx);
             }
@@ -489,7 +491,7 @@ impl AppView {
         crate::downloads::load_history(cx);
         cx.set_global(AutoplayNext::default());
         cx.set_global(crate::ui::cards::Watched(store::progress_map()));
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search or paste a YouTube link"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(t("Search or paste a YouTube link")));
         let dialog_input = cx.new(|cx| InputState::new(window, cx));
         let mut subs = Vec::new();
         subs.push(cx.subscribe_in(&search, window, |this: &mut Self, state, ev: &InputEvent, window, cx| match ev {
@@ -712,7 +714,7 @@ impl AppView {
                     return;
                 }
                 if Instant::now() > deadline {
-                    return fail(&this, cx, "The code expired. Try again.".into());
+                    return fail(&this, cx, t("The code expired. Try again.").into());
                 }
                 let d = dc.clone();
                 match blocking(move || auth::poll_login(&d)).await {
@@ -723,7 +725,7 @@ impl AppView {
                             t.dialog = None;
                             t.login.code = None;
                             t.reload_page = true;
-                            toast(cx, format!("Signed in as {}", acc.name));
+                            toast(cx, tf!("Signed in as {0}", acc.name));
                             cx.notify();
                         });
                         // bring the account's history and subscriptions to this device
@@ -732,7 +734,7 @@ impl AppView {
                         let _ = this.update(cx, |t, cx| {
                             if let Ok(n) = res {
                                 if n > 0 {
-                                    toast(cx, format!("Added {n} subscriptions from your account"));
+                                    toast(cx, tf!("Added {0} subscriptions from your account", n));
                                     t.reload_page = true;
                                     cx.notify();
                                 }
@@ -796,7 +798,7 @@ impl AppView {
                         if matches!(t.dialog, Some(Dialog::WebSignIn)) {
                             t.dialog = None;
                         }
-                        toast(cx, format!("Connected as {name}. What you watch now shows in your YouTube history."));
+                        toast(cx, tf!("Connected as {0}. What you watch now shows in your YouTube history.", name));
                         cx.refresh_windows();
                     }
                     Err(e) => {
@@ -820,7 +822,7 @@ impl AppView {
                 .items_center()
                 .gap_3()
                 .child(icon("history").size_6().text_color(p.text))
-                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Connect your YouTube history")),
+                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(t("Connect your YouTube history"))),
         );
         let cookies_link = div()
             .id("wsi-cookies")
@@ -828,7 +830,7 @@ impl AppView {
             .text_color(p.link)
             .cursor_pointer()
             .hover(|s| s.underline())
-            .child("Use a cookies.txt file instead")
+            .child(t("Use a cookies.txt file instead"))
             .on_click(|_, _, cx| import_web_cookies(cx));
         let cancel = pill("wsi-cancel", None, "Cancel", cx).on_click(cx.listener(|this, _, _, cx| {
             if let Some(c) = this.web_login.cancel.take() {
@@ -861,12 +863,12 @@ impl AppView {
                         .gap_2()
                         .text_sm()
                         .text_color(p.text2)
-                        .child(format!("Sign in to YouTube in the {browser} window that opened. It closes by itself when you're done."))
+                        .child(tf!("Sign in to YouTube in the {0} window that opened. It closes by itself when you're done.", browser))
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(p.text3)
-                                .child("Videos you watch in Stream Tube then show in your YouTube history, and your phone and TV resume them where you stopped. The window uses its own empty profile, which is deleted afterwards."),
+                                .child(t("Videos you watch in Stream Tube then show in your YouTube history, and your phone and TV resume them where you stopped. The window uses its own empty profile, which is deleted afterwards.")),
                         ),
                 )
                 .child(
@@ -874,7 +876,7 @@ impl AppView {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().flex().items_center().gap_2().child(spinner(cx)).child(div().text_xs().text_color(p.text3).child("Waiting for sign-in…")))
+                        .child(div().flex().items_center().gap_2().child(spinner(cx)).child(div().text_xs().text_color(p.text3).child(t("Waiting for sign-in…"))))
                         .child(cancel),
                 )
                 .child(cookies_link);
@@ -890,7 +892,7 @@ impl AppView {
                 .items_center()
                 .gap_3()
                 .child(icon("circle-user").size_6().text_color(p.text))
-                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Sign in to YouTube")),
+                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(t("Sign in to YouTube"))),
         );
         if let Some(err) = &self.login.error {
             col = col.child(div().text_sm().text_color(p.text2).child(err.clone())).child(
@@ -919,7 +921,7 @@ impl AppView {
                         .text_sm()
                         .text_color(p.text2)
                         .child(
-                            div().flex().gap_1().child("1. On any device, go to").child(
+                            div().flex().gap_1().child(t("1. On any device, go to")).child(
                                 div()
                                     .id("si-url")
                                     .text_color(p.link)
@@ -931,7 +933,7 @@ impl AppView {
                                     }),
                             ),
                         )
-                        .child("2. Enter this code and pick your account"),
+                        .child(t("2. Enter this code and pick your account")),
                 )
                 .child(
                     div()
@@ -957,7 +959,7 @@ impl AppView {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_xs().text_color(p.text3).child("Waiting for approval…"))
+                        .child(div().text_xs().text_color(p.text3).child(t("Waiting for approval…")))
                         .child(
                             div()
                                 .flex()
@@ -982,7 +984,7 @@ impl AppView {
                     .gap_3()
                     .py_4()
                     .child(spinner(cx))
-                    .child(div().text_sm().text_color(p.text2).child("Getting a code…")),
+                    .child(div().text_sm().text_color(p.text2).child(t("Getting a code…"))),
             );
         }
         col.into_any_element()
@@ -1009,7 +1011,7 @@ impl AppView {
                 .cursor_pointer()
                 .hover(move |s| s.bg(p.hover))
                 .child(icon("circle-user").size_5().text_color(p.link))
-                .child("Sign in")
+                .child(t("Sign in"))
                 .on_click(cx.listener(|this, _, _, cx| this.start_sign_in(cx)))
                 .into_any_element();
         }
@@ -1034,9 +1036,9 @@ impl AppView {
                 let handle = acc.handle.clone();
                 let items = vec![
                     MenuItem::new("circle-user", label, |_, _| {}),
-                    MenuItem::new("square-user", "Your channel", move |_, cx| {
+                    MenuItem::new("square-user", t("Your channel"), move |_, cx| {
                         let Some(h) = handle.clone() else {
-                            toast(cx, "Channel handle unknown");
+                            toast(cx, t("Channel handle unknown"));
                             return;
                         };
                         let url = format!("https://www.youtube.com/{}", if h.starts_with('@') { h } else { format!("@{h}") });
@@ -1048,22 +1050,22 @@ impl AppView {
                                         let _ = w.update(cx, |_, window, cx| navigate(Route::Channel(id), window, cx));
                                     }
                                 }
-                                _ => toast(cx, "Could not open your channel"),
+                                _ => toast(cx, t("Could not open your channel")),
                             });
                         })
                         .detach();
                     }),
-                    MenuItem::new("history", "History", |window, cx| navigate(Route::History, window, cx)),
-                    MenuItem::new("list-video", "Playlists", |window, cx| navigate(Route::Library, window, cx)),
-                    MenuItem::new("download", "Downloads", |window, cx| navigate(Route::Downloads, window, cx)),
-                    MenuItem::new("settings", "Settings", |window, cx| navigate(Route::Settings, window, cx)),
-                    MenuItem::new("refresh-cw", "Sync subscriptions", |_, cx| {
+                    MenuItem::new("history", t("History"), |window, cx| navigate(Route::History, window, cx)),
+                    MenuItem::new("list-video", t("Playlists"), |window, cx| navigate(Route::Library, window, cx)),
+                    MenuItem::new("download", t("Downloads"), |window, cx| navigate(Route::Downloads, window, cx)),
+                    MenuItem::new("settings", t("Settings"), |window, cx| navigate(Route::Settings, window, cx)),
+                    MenuItem::new("refresh-cw", t("Sync subscriptions"), |_, cx| {
                         cx.spawn(async move |cx| {
                             let res = blocking(crate::api::auth::sync_subscriptions).await;
                             let _ = cx.update(|cx| {
                                 match res {
-                                    Ok(0) => toast(cx, "Subscriptions are up to date"),
-                                    Ok(n) => toast(cx, format!("Added {n} subscriptions")),
+                                    Ok(0) => toast(cx, t("Subscriptions are up to date")),
+                                    Ok(n) => toast(cx, tf!("Added {0} subscriptions", n)),
                                     Err(e) => toast(cx, crate::ui::friendly_error(&e.to_string())),
                                 }
                                 cx.refresh_windows();
@@ -1071,13 +1073,13 @@ impl AppView {
                         })
                         .detach();
                     }),
-                    MenuItem::new("users", "Switch account", |_, cx| {
+                    MenuItem::new("users", t("Switch account"), |_, cx| {
                         sign_out(cx);
                         if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
                             app.update(cx, |a, cx| a.start_sign_in(cx));
                         }
                     }),
-                    MenuItem::new("log-out", "Sign out", |_, cx| sign_out(cx)),
+                    MenuItem::new("log-out", t("Sign out"), |_, cx| sign_out(cx)),
                 ];
                 open_menu(ev.position(), items, window, cx);
             })
@@ -1130,7 +1132,7 @@ impl AppView {
         }
         cx.set_global(OpenMenu(None));
         if self.tabs.len() >= MAX_TABS {
-            toast(cx, format!("You can have up to {MAX_TABS} tabs open"));
+            toast(cx, tf!("You can have up to {0} tabs open", MAX_TABS));
             return;
         }
         let id = self.next_tab_id;
@@ -1141,7 +1143,7 @@ impl AppView {
         if switch {
             self.switch_tab(at, window, cx);
         } else {
-            toast(cx, "Opened in a new tab");
+            toast(cx, t("Opened in a new tab"));
             cx.notify();
         }
     }
@@ -1212,9 +1214,9 @@ impl AppView {
         match route {
             Route::Watch { id, .. } => {
                 let p = player(cx).read(cx);
-                p.video.as_ref().filter(|v| &v.id == id && !v.title.is_empty()).map(|v| v.title.clone()).unwrap_or_else(|| "Video".into())
+                p.video.as_ref().filter(|v| &v.id == id && !v.title.is_empty()).map(|v| v.title.clone()).unwrap_or_else(|| t("Video").into())
             }
-            Route::Channel(id) => store::subscriptions().into_iter().find(|s| &s.channel_id == id).map(|s| s.name).unwrap_or_else(|| "Channel".into()),
+            Route::Channel(id) => store::subscriptions().into_iter().find(|s| &s.channel_id == id).map(|s| s.name).unwrap_or_else(|| t("Channel").into()),
             r => r.title(),
         }
     }
@@ -1439,7 +1441,7 @@ impl AppView {
                     Ok(innertube::ResolvedUrl::Channel(id)) => a.go(Route::Channel(id), window, cx),
                     Ok(innertube::ResolvedUrl::Playlist(id)) => a.go(Route::Playlist(id), window, cx),
                     Ok(innertube::ResolvedUrl::Video(id)) => a.go(Route::Watch { id, playlist: None, start: None }, window, cx),
-                    Err(e) => toast(cx, format!("Could not open link: {}", crate::ui::friendly_error(&e.to_string()))),
+                    Err(e) => toast(cx, tf!("Could not open link: {0}", crate::ui::friendly_error(&e.to_string()))),
                 });
             })
             .detach();
@@ -1562,22 +1564,22 @@ impl AppView {
                     .gap_2()
                     .py_8()
                     .child(icon("download").size_8().text_color(p.text3))
-                    .child(div().text_sm().text_color(p.text2).child("No downloads yet")),
+                    .child(div().text_sm().text_color(p.text2).child(t("No downloads yet"))),
             );
         }
         for j in jobs.iter().take(50) {
             let id = j.id;
             let title = if j.video.title.is_empty() { j.video.id.clone() } else { j.video.title.clone() };
             let (line, color, running) = match &j.status {
-                JobStatus::Queued => ("Waiting…".to_string(), p.text2, true),
-                JobStatus::Running => (format!("{:.0}%  {}", j.progress * 100.0, j.detail.split("at").nth(1).map(|s| format!("· {}", s.trim())).unwrap_or_default()), p.text2, true),
+                JobStatus::Queued => (t("Waiting…").to_string(), p.text2, true),
+                JobStatus::Running => (format!("{:.0}%{}", j.progress * 100.0, j.detail.split("at").nth(1).map(|s| format!(", {}", s.trim())).unwrap_or_default()), p.text2, true),
                 JobStatus::Done(path) => (
-                    std::fs::metadata(path).map(|m| format!("{:.1} MB · {}", m.len() as f64 / 1e6, j.format)).unwrap_or_else(|_| "File missing".into()),
+                    std::fs::metadata(path).map(|m| tf!("{0} MB, {1}", format_args!("{:.1}", m.len() as f64 / 1e6), j.format)).unwrap_or_else(|_| t("File missing").into()),
                     p.text2,
                     false,
                 ),
-                JobStatus::Failed(e) => (format!("Failed: {e}"), rgb(0xff4e45).into(), false),
-                JobStatus::Cancelled => ("Cancelled".into(), p.text2, false),
+                JobStatus::Failed(e) => (tf!("Failed: {0}", e), rgb(0xff4e45).into(), false),
+                JobStatus::Cancelled => (t("Cancelled").into(), p.text2, false),
             };
             let done_path = if let JobStatus::Done(pth) = &j.status { Some(pth.clone()) } else { None };
             let open_path = done_path.clone();
@@ -1635,16 +1637,16 @@ impl AppView {
                 }));
             } else {
                 if let Some(pth) = done_path.clone() {
-                    row = row.child(small_btn(SharedString::from(format!("dlp-f-{id}")), "folder-open", "Show in folder").on_click(move |_, _, cx| {
+                    row = row.child(small_btn(SharedString::from(format!("dlp-f-{id}")), "folder-open", t("Show in folder")).on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         reveal_in_folder(&pth, cx);
                     }));
-                    row = row.child(small_btn(SharedString::from(format!("dlp-d-{id}")), "trash-2", "Delete file").on_click(move |_, _, cx| {
+                    row = row.child(small_btn(SharedString::from(format!("dlp-d-{id}")), "trash-2", t("Delete file")).on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         downloads::delete_file(id, cx)
                     }));
                 }
-                row = row.child(small_btn(SharedString::from(format!("dlp-r-{id}")), "x", "Remove from list").on_click(move |_, _, cx| {
+                row = row.child(small_btn(SharedString::from(format!("dlp-r-{id}")), "x", t("Remove from list")).on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     downloads::remove(id, cx)
                 }));
@@ -1662,7 +1664,7 @@ impl AppView {
                 .text_color(p.link)
                 .cursor_pointer()
                 .hover(move |s| s.bg(p.hover))
-                .child(label)
+                .child(t(label))
         };
         let has_finished = jobs.iter().any(|j| !matches!(j.status, JobStatus::Running | JobStatus::Queued));
         Some(
@@ -1702,7 +1704,7 @@ impl AppView {
                                     .px_4()
                                     .pt_3()
                                     .pb_2()
-                                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child("Downloads"))
+                                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(t("Downloads")))
                                     .when(has_finished, |d| {
                                         d.child(footer_btn("dlp-clear", "Clear list").on_click(|_, _, cx| downloads::clear_history(cx)))
                                     }),
@@ -1953,13 +1955,13 @@ impl AppView {
                 (",", true) | ("<", _) => {
                     let s = pl.speed;
                     pl.set_speed(s - 0.25);
-                    crate::ui::toast(cx, format!("Speed {:.2}x", (s - 0.25).max(0.25)));
+                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", (s - 0.25).max(0.25))));
                     true
                 }
                 (".", true) | (">", _) => {
                     let s = pl.speed;
                     pl.set_speed(s + 0.25);
-                    crate::ui::toast(cx, format!("Speed {:.2}x", s + 0.25));
+                    crate::ui::toast(cx, tf!("Speed {0}x", format_args!("{:.2}", s + 0.25)));
                     true
                 }
                 ("home", _) => {
@@ -2024,6 +2026,7 @@ impl AppView {
     // ───── chrome ─────
 
     fn render_topbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        localize_placeholder(&self.search, "Search or paste a YouTube link", window, cx);
         let p = pal(cx);
         let can_back = !self.history.is_empty();
         let suggestions = if self.show_suggestions { self.all_suggestions() } else { Vec::new() };
@@ -2153,7 +2156,7 @@ impl AppView {
                                                         .id(SharedString::from(format!("sugx-{i}")))
                                                         .text_xs()
                                                         .text_color(p.link)
-                                                        .child("Remove")
+                                                        .child(t("Remove"))
                                                         .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
                                                             cx.stop_propagation();
                                                             store::search_history_remove(&s3);
@@ -2252,7 +2255,7 @@ impl AppView {
             icon(name).size_5().text_color(if active { p.accent } else { p.text }).into_any_element()
         };
         let entry = |id: &'static str, name: &'static str, label: &str, r: Route, active: bool, cx: &mut Context<Self>| {
-            row(id.into(), ic(name, active), label.to_string(), active)
+            row(id.into(), ic(name, active), t(label).to_string(), active)
                 .on_click(cx.listener(move |this, _, window, cx| this.go(r.clone(), window, cx)))
         };
         let heading = |title: &str| {
@@ -2266,7 +2269,7 @@ impl AppView {
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(p.text)
-                .child(title.to_string())
+                .child(t(title).to_string())
         };
         let sep = || div().flex_none().mx_3().my_3().h(px(1.)).bg(p.border);
 
@@ -2297,7 +2300,7 @@ impl AppView {
             let active = route == Route::LocalPlaylist(pl.id);
             let id = pl.id;
             col = col.child(
-                row(SharedString::from(format!("s-lp-{id}")), ic(name, active), pl.name.clone(), active)
+                row(SharedString::from(format!("s-lp-{id}")), ic(name, active), t(&pl.name).to_string(), active)
                     .on_click(cx.listener(move |this, _, window, cx| this.go(Route::LocalPlaylist(id), window, cx))),
             );
         }
@@ -2323,7 +2326,7 @@ impl AppView {
                             .text_color(p.text2)
                             .cursor_pointer()
                             .hover(move |s| s.bg(p.hover).text_color(p.text))
-                            .child("Manage")
+                            .child(t("Manage"))
                             .on_click(cx.listener(|this, _, window, cx| this.go(Route::Channels, window, cx))),
                     ),
             );
@@ -2342,7 +2345,7 @@ impl AppView {
                     row(
                         "s-subs-more".into(),
                         icon(if expanded { "chevron-up" } else { "chevron-down" }).size_5().text_color(p.text).into_any_element(),
-                        if expanded { "Show fewer".into() } else { format!("Show {} more", subs.len() - SHOWN) },
+                        if expanded { t("Show fewer").into() } else { tf!("Show {0} more", subs.len() - SHOWN) },
                         false,
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -2358,7 +2361,7 @@ impl AppView {
             for (i, (name, _)) in innertube::EXPLORE.iter().enumerate() {
                 let active = route == Route::Explore(i);
                 col = col.child(
-                    row(SharedString::from(format!("s-ex-{i}")), ic(icons.get(i).copied().unwrap_or("compass"), active), name.to_string(), active)
+                    row(SharedString::from(format!("s-ex-{i}")), ic(icons.get(i).copied().unwrap_or("compass"), active), t(name).to_string(), active)
                         .on_click(cx.listener(move |this, _, window, cx| this.go(Route::Explore(i), window, cx))),
                 );
             }
@@ -2582,7 +2585,7 @@ impl AppView {
             Status::Available(r) => (r, None),
             Status::Downloading(r, f) => (r, Some(f)),
             _ => {
-                return div().p_5().text_sm().text_color(p.text2).child("No update available").into_any_element();
+                return div().p_5().text_sm().text_color(p.text2).child(t("No update available")).into_any_element();
             }
         };
         // release notes are Markdown; long ones are cut at a line break
@@ -2596,9 +2599,9 @@ impl AppView {
         let version = rel.name.trim_start_matches("Stream Tube").trim().trim_start_matches('v').to_string();
         let accent = crate::ui::app_icon::icon_accent(store::settings_snapshot().accent);
         let [c0, _, c2] = crate::ui::app_icon::accent_stops(accent);
-        let mut meta = vec![format!("You have {}", crate::updater::current_version())];
+        let mut meta = vec![tf!("You have {0}", crate::updater::current_version())];
         if rel.prerelease {
-            meta.push("Pre-release".into());
+            meta.push(t("Pre-release").into());
         }
         if let Some(sz) = size {
             meta.push(sz);
@@ -2649,14 +2652,14 @@ impl AppView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(white())
                     .child(icon("sparkles").size_3p5().text_color(white()))
-                    .child("New version"),
+                    .child(t("New version")),
             )
             .child(div().text_3xl().font_weight(FontWeight::BOLD).text_color(white()).child(format!("Stream Tube {version}")))
-            .child(div().text_sm().text_color(hsla(0., 0., 1., 0.85)).child(meta.join("  ·  ")));
+            .child(div().text_sm().text_color(hsla(0., 0., 1., 0.85)).child(meta.join(", ")));
 
         let mut body = div().flex().flex_col().gap_4().p_6();
         if !notes.trim().is_empty() {
-            body = body.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text2).child("WHAT'S NEW")).child(
+            body = body.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text2).child(t("WHAT'S NEW"))).child(
                 div()
                     .id("upd-notes")
                     .when(notes.len() > 280, |d| d.h(px(230.)))
@@ -2682,7 +2685,7 @@ impl AppView {
                             .flex()
                             .justify_between()
                             .text_sm()
-                            .child(div().text_color(p.text).font_weight(FontWeight::MEDIUM).child(if f >= 0.999 { "Installing…" } else { "Downloading…" }))
+                            .child(div().text_color(p.text).font_weight(FontWeight::MEDIUM).child(if f >= 0.999 { t("Installing…") } else { t("Downloading…") }))
                             .child(div().text_color(p.text2).child(format!("{:.0}%", f * 100.0))),
                     )
                     .child(
@@ -2709,7 +2712,7 @@ impl AppView {
                                 ),
                         ),
                     )
-                    .child(div().text_xs().text_color(p.text2).child("Stream Tube restarts by itself when it's done.")),
+                    .child(div().text_xs().text_color(p.text2).child(t("Stream Tube restarts by itself when it's done."))),
             );
             return div().flex().flex_col().child(hero).child(body).into_any_element();
         }
@@ -2725,12 +2728,12 @@ impl AppView {
                         .gap_4()
                         .text_sm()
                         .text_color(p.text2)
-                        .child(div().id("upd-skip").cursor_pointer().hover(|s| s.text_color(p.text)).child("Skip this version").on_click(cx.listener(|this, _, _, cx| {
+                        .child(div().id("upd-skip").cursor_pointer().hover(|s| s.text_color(p.text)).child(t("Skip this version")).on_click(cx.listener(|this, _, _, cx| {
                             crate::updater::skip(cx);
                             this.dialog = None;
                             cx.notify();
                         })))
-                        .child(div().id("upd-later").cursor_pointer().hover(|s| s.text_color(p.text)).child("Later").on_click(cx.listener(|this, _, _, cx| {
+                        .child(div().id("upd-later").cursor_pointer().hover(|s| s.text_color(p.text)).child(t("Later")).on_click(cx.listener(|this, _, _, cx| {
                             this.dialog = None;
                             cx.notify();
                         }))),
@@ -2752,7 +2755,7 @@ impl AppView {
                         .text_color(white())
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(icon(if has_installer { "download" } else { "external-link" }).size_4().text_color(white()))
-                        .child(if has_installer { "Update now" } else { "Download" })
+                        .child(if has_installer { t("Update now") } else { t("Download") })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if !has_installer {
                                 this.dialog = None;
@@ -2780,7 +2783,7 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).pb_2().child("Save video to…"))
+                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).pb_2().child(t("Save video to…")))
                     .children(pls.into_iter().map(|pl| {
                         let contains = store::playlist_contains(pl.id, &v.id);
                         let v2 = v.clone();
@@ -2795,15 +2798,15 @@ impl AppView {
                             .cursor_pointer()
                             .hover(move |s| s.bg(p.hover))
                             .child(icon(if contains { "square-check" } else { "square" }).text_color(p.text))
-                            .child(div().flex_1().text_sm().text_color(p.text).child(pl.name.clone()))
+                            .child(div().flex_1().text_sm().text_color(p.text).child(if pl.protected { t(&pl.name).to_string() } else { pl.name.clone() }))
                             .child(icon(if pl.protected { "lock" } else { "globe-lock" }).size_4().text_color(p.text3))
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 if store::playlist_contains(pl.id, &v2.id) {
                                     store::playlist_remove(pl.id, &v2.id);
-                                    toast(cx, format!("Removed from {}", pl.name));
+                                    toast(cx, tf!("Removed from {0}", pl.name));
                                 } else {
                                     store::playlist_add(pl.id, &v2);
-                                    toast(cx, format!("Saved to {}", pl.name));
+                                    toast(cx, tf!("Saved to playlist “{0}”", pl.name));
                                 }
                                 cx.notify();
                             }))
@@ -2821,7 +2824,7 @@ impl AppView {
                             .cursor_pointer()
                             .hover(move |s| s.bg(p.hover))
                             .child(icon("plus").text_color(p.text))
-                            .child(div().text_sm().text_color(p.text).child("Create new playlist"))
+                            .child(div().text_sm().text_color(p.text).child(t("Create new playlist")))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let v3 = v.clone();
                                 this.dialog = None;
@@ -2831,7 +2834,7 @@ impl AppView {
                                     prompt_text("New playlist", "Playlist name", window, cx, move |name, _, cx| {
                                         let id = store::playlist_create(&name);
                                         store::playlist_add(id, &v4);
-                                        toast(cx, format!("Saved to {name}"));
+                                        toast(cx, tf!("Saved to playlist “{0}”", name));
                                     });
                                 });
                             })),
@@ -2842,7 +2845,7 @@ impl AppView {
                 .flex()
                 .flex_col()
                 .gap_4()
-                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(title.clone()))
+                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(t(title).to_string()))
                 .child(div().border_b_1().border_color(p.text2).pb_1().child(Input::new(&self.dialog_input).appearance(false)))
                 .child(
                     div().flex().justify_end().gap_2().child(pill("dlg-cancel", None, "Cancel", cx).on_click(cx.listener(|this, _, _, cx| {
@@ -2866,8 +2869,8 @@ impl AppView {
                 .flex()
                 .flex_col()
                 .gap_4()
-                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(title.clone()))
-                .child(div().text_sm().text_color(p.text2).child(body.clone()))
+                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(t(title).to_string()))
+                .child(div().text_sm().text_color(p.text2).child(t(body).to_string()))
                 .child(
                     div().flex().justify_end().gap_2().child(pill("dlg-cancel", None, "Cancel", cx).on_click(cx.listener(|this, _, _, cx| {
                         this.dialog = None;
@@ -3251,7 +3254,7 @@ fn build_page(route: &Route, window: &mut Window, cx: &mut App) -> AnyView {
 /// Shows a file selected in the system file manager.
 pub fn reveal_in_folder(path: &str, cx: &mut App) {
     if !std::path::Path::new(path).exists() {
-        toast(cx, "File not found (moved or deleted)");
+        toast(cx, t("File not found (moved or deleted)"));
         return;
     }
     #[cfg(windows)]

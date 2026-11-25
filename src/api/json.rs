@@ -415,23 +415,67 @@ pub fn now() -> i64 {
 }
 
 pub fn relative_from_ts(ts: i64) -> String {
+    use crate::i18n::{self, AppLanguage};
+
     let d = (now() - ts).max(0);
-    let (n, u) = if d < 60 {
-        return "just now".into();
+    let (n, messages, ru, uk) = if d < 60 {
+        return i18n::t("just now").into();
     } else if d < 3600 {
-        (d / 60, "minute")
+        (
+            d / 60,
+            ["{0} minute ago", "{0} minutes ago"],
+            ["минуту", "минуты", "минут"],
+            ["хвилину", "хвилини", "хвилин"],
+        )
     } else if d < 86400 {
-        (d / 3600, "hour")
+        (
+            d / 3600,
+            ["{0} hour ago", "{0} hours ago"],
+            ["час", "часа", "часов"],
+            ["годину", "години", "годин"],
+        )
     } else if d < 7 * 86400 {
-        (d / 86400, "day")
+        (
+            d / 86400,
+            ["{0} day ago", "{0} days ago"],
+            ["день", "дня", "дней"],
+            ["день", "дні", "днів"],
+        )
     } else if d < 30 * 86400 {
-        (d / (7 * 86400), "week")
+        (
+            d / (7 * 86400),
+            ["{0} week ago", "{0} weeks ago"],
+            ["неделю", "недели", "недель"],
+            ["тиждень", "тижні", "тижнів"],
+        )
     } else if d < 365 * 86400 {
-        (d / (30 * 86400), "month")
+        (
+            d / (30 * 86400),
+            ["{0} month ago", "{0} months ago"],
+            ["месяц", "месяца", "месяцев"],
+            ["місяць", "місяці", "місяців"],
+        )
     } else {
-        (d / (365 * 86400), "year")
+        (
+            d / (365 * 86400),
+            ["{0} year ago", "{0} years ago"],
+            ["год", "года", "лет"],
+            ["рік", "роки", "років"],
+        )
     };
-    format!("{n} {u}{} ago", if n == 1 { "" } else { "s" })
+
+    let (forms, suffix) = match i18n::language() {
+        AppLanguage::Russian => (ru, "назад"),
+        AppLanguage::Ukrainian => (uk, "тому"),
+        _ => return i18n::format(messages[usize::from(n != 1)], &[&n]),
+    };
+    let form = match (n % 100, n % 10) {
+        (11..=14, _) => forms[2],
+        (_, 1) => forms[0],
+        (_, 2..=4) => forms[1],
+        _ => forms[2],
+    };
+    format!("{n} {form} {suffix}")
 }
 
 /// "27K", "1.2M", "27,124", "3 likes" -> a number; None without digits.

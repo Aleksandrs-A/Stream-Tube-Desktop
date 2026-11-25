@@ -1,5 +1,6 @@
 //! Persistent storage: settings (JSON) + SQLite for subscriptions, history, playlists, caches.
 use crate::api::types::VideoItem;
+use crate::i18n::AppLanguage;
 use anyhow::Result;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -13,6 +14,7 @@ use std::sync::{Arc, OnceLock};
 pub struct Settings {
     // Appearance
     pub theme: String,
+    pub app_language: AppLanguage,
     pub accent: u32,
     pub start_page: String,
     pub grid_columns: u32,
@@ -144,6 +146,7 @@ impl Default for Settings {
         }
         Self {
             theme: "dark".into(),
+            app_language: AppLanguage::default(),
             accent: 0xff0033,
             start_page: "home".into(),
             grid_columns: 0,

@@ -1,5 +1,6 @@
 //! Video / channel / playlist cards in YouTube desktop style.
 use super::*;
+use crate::i18n::{t, tf};
 use crate::api::types::*;
 use crate::store;
 use crate::ui::app::{MenuItem, Route, navigate, open_menu};
@@ -78,22 +79,22 @@ pub fn meta_line(v: &VideoItem) -> String {
     }
     if v.is_live {
         if parts.is_empty() {
-            parts.push("LIVE".into());
+            parts.push(t("LIVE").into());
         }
     } else if let Some(p) = &v.published_text {
         parts.push(p.clone());
     } else if let Some(ts) = v.published_ts {
         parts.push(crate::api::json::relative_from_ts(ts));
     }
-    parts.join(" • ")
+    parts.join(", ")
 }
 
 fn badge(v: &VideoItem, cx: &App) -> Option<AnyElement> {
     let _ = cx;
     let (text, bg): (String, Hsla) = if v.is_live {
-        ("LIVE".into(), rgb(0xcc0000).into())
+        (t("LIVE").into(), rgb(0xcc0000).into())
     } else if v.is_upcoming {
-        ("UPCOMING".into(), hsla(0., 0., 0., 0.8))
+        (t("UPCOMING").into(), hsla(0., 0., 0., 0.8))
     } else if v.is_short && v.duration_text.is_none() {
         ("SHORTS".into(), hsla(0., 0., 0., 0.8))
     } else {
@@ -150,58 +151,58 @@ pub fn video_menu_items(v: &VideoItem) -> Vec<MenuItem> {
     let mut items = Vec::new();
     {
         let route = if v.is_short { Route::Shorts(Some(v.id.clone())) } else { Route::Watch { id: v.id.clone(), playlist: None, start: None } };
-        items.push(MenuItem::new("app-window", "Open in new tab", move |window, cx| {
+        items.push(MenuItem::new("app-window", t("Open in new tab"), move |window, cx| {
             crate::ui::app::open_in_new_tab(route.clone(), false, window, cx)
         }));
     }
     let v1 = v.clone();
-    items.push(MenuItem::new("list-plus", "Add to queue", move |_, cx| {
+    items.push(MenuItem::new("list-plus", t("Add to queue"), move |_, cx| {
         crate::player::controller::enqueue(v1.clone(), cx);
-        toast(cx, "Added to queue");
+        toast(cx, t("Added to queue"));
     }));
     let v2 = v.clone();
-    items.push(MenuItem::new("clock", "Save to Watch later", move |_, cx| {
+    items.push(MenuItem::new("clock", t("Save to Watch later"), move |_, cx| {
         if let Some(wl) = store::playlists().into_iter().find(|p| p.protected && p.name == "Watch later") {
             store::playlist_add(wl.id, &v2);
-            toast(cx, "Saved to Watch later");
+            toast(cx, t("Saved to Watch later"));
         }
     }));
     let v3 = v.clone();
-    items.push(MenuItem::new("bookmark", "Save to playlist…", move |window, cx| {
+    items.push(MenuItem::new("bookmark", t("Save to playlist…"), move |window, cx| {
         crate::ui::app::open_save_dialog(v3.clone(), window, cx);
     }));
     let v4 = v.clone();
-    items.push(MenuItem::new("download", "Download", move |_, cx| {
+    items.push(MenuItem::new("download", t("Download"), move |_, cx| {
         crate::downloads::start(v4.clone(), None, cx);
     }));
     let v5 = v.clone();
-    items.push(MenuItem::new("external-link", "Open in external player", move |_, cx| {
+    items.push(MenuItem::new("external-link", t("Open in external player"), move |_, cx| {
         crate::downloads::open_external(&v5.id, cx);
     }));
     let id = v.id.clone();
-    items.push(MenuItem::new("link", "Copy link", move |_, cx| {
+    items.push(MenuItem::new("link", t("Copy link"), move |_, cx| {
         copy_to_clipboard(format!("https://www.youtube.com/watch?v={id}"), cx);
     }));
     let id2 = v.id.clone();
-    items.push(MenuItem::new("globe", "Open on YouTube", move |_, _| {
+    items.push(MenuItem::new("globe", t("Open on YouTube"), move |_, _| {
         let _ = open::that(format!("https://www.youtube.com/watch?v={id2}"));
     }));
     if let Some(cid) = v.channel_id.clone() {
         let name = v.channel_name.clone();
-        items.push(MenuItem::new("ban", "Don't recommend channel", move |_, cx| {
+        items.push(MenuItem::new("ban", t("Don't recommend channel"), move |_, cx| {
             let (cid, name) = (cid.clone(), name.clone());
             store::update_settings(|s| {
                 if !s.blocked_channels.iter().any(|(i, _)| *i == cid) {
                     s.blocked_channels.push((cid, name));
                 }
             });
-            toast(cx, "Channel blocked. Manage in Settings → Content filters");
+            toast(cx, t("Channel blocked. Manage in Settings → Content filters"));
             cx.refresh_windows();
         }));
     }
     if is_watched_in_history(&v.id) {
         let id3 = v.id.clone();
-        items.push(MenuItem::new("eye-off", "Remove from history", move |_, cx| {
+        items.push(MenuItem::new("eye-off", t("Remove from history"), move |_, cx| {
             store::history_remove(&id3);
             cx.default_global::<Watched>().0.remove(&id3);
             cx.refresh_windows();
@@ -522,7 +523,7 @@ pub fn sync_subscription(channel_id: String, on: bool, cx: &mut App) {
     cx.spawn(async move |cx| {
         let res = blocking(move || crate::api::auth::subscribe(&channel_id, on)).await;
         if res.is_err() {
-            let _ = cx.update(|cx| toast(cx, "Couldn't update the subscription on your YouTube account"));
+            let _ = cx.update(|cx| toast(cx, t("Couldn't update the subscription on your YouTube account")));
         }
     })
     .detach();
@@ -543,18 +544,18 @@ pub fn subscribe_button(id: SharedString, c: &ChannelItem, subscribed: bool, cx:
         .cursor_pointer()
         .text_sm()
         .font_weight(FontWeight::MEDIUM)
-        .when(subscribed, |d| d.bg(p.chip).text_color(p.text).hover(move |s| s.bg(p.hover)).child(icon("bell").size_4()).child("Subscribed"))
-        .when(!subscribed, |d| d.bg(p.chip_active_bg).text_color(p.chip_active_fg).child("Subscribe"))
+        .when(subscribed, |d| d.bg(p.chip).text_color(p.text).hover(move |s| s.bg(p.hover)).child(icon("bell").size_4()).child(t("Subscribed")))
+        .when(!subscribed, |d| d.bg(p.chip_active_bg).text_color(p.chip_active_fg).child(t("Subscribe")))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
             let on = !store::is_subscribed(&c.id);
             if on {
                 store::subscribe(&c.id, &c.name, c.avatar.as_deref());
-                toast(cx, format!("Subscribed to {}", c.name));
+                toast(cx, tf!("Subscribed to {0}", c.name));
             } else {
                 store::unsubscribe(&c.id);
-                toast(cx, format!("Unsubscribed from {}", c.name));
+                toast(cx, tf!("Unsubscribed from {0}", c.name));
             }
             sync_subscription(c.id.clone(), on, cx);
             cx.refresh_windows();
@@ -603,7 +604,7 @@ pub fn playlist_card(pl: &PlaylistItem, width: Pixels, cx: &mut App) -> AnyEleme
                 .gap_1()
                 .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).line_clamp(2).child(pl.title.clone()))
                 .when_some(pl.channel_name.clone(), |d, c| d.child(div().text_sm().text_color(p.text2).truncate().child(c)))
-                .child(div().text_sm().text_color(p.text2).child("View full playlist")),
+                .child(div().text_sm().text_color(p.text2).child(t("View full playlist"))),
         )
         .into_any_element()
 }
@@ -671,7 +672,7 @@ pub fn playlist_row(pl: &PlaylistItem, cx: &mut App) -> AnyElement {
                 .flex_1()
                 .child(div().text_lg().text_color(p.text).line_clamp(2).child(pl.title.clone()))
                 .when_some(pl.channel_name.clone(), |d, c| d.child(div().text_xs().text_color(p.text2).child(c)))
-                .child(div().text_xs().text_color(p.text2).font_weight(FontWeight::MEDIUM).child("View full playlist")),
+                .child(div().text_xs().text_color(p.text2).font_weight(FontWeight::MEDIUM).child(t("View full playlist"))),
         )
         .into_any_element()
 }

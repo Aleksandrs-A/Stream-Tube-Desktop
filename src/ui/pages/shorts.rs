@@ -1,4 +1,5 @@
 use crate::api::innertube::{self, SearchFilter};
+use crate::i18n::t;
 use crate::api::json::compact_number;
 use crate::api::services;
 use crate::api::types::*;
@@ -489,7 +490,7 @@ impl ShortsPage {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(p.link)
                             .cursor_pointer()
-                            .child("Show more replies")
+                            .child(t("Show more replies"))
                             .on_click(cx.listener(move |t, _, _, cx| t.load_replies(cid.clone(), tok.clone(), cx)))
                             .into_any_element(),
                         true,
@@ -550,7 +551,7 @@ impl ShortsPage {
                             .flex()
                             .items_baseline()
                             .gap_2()
-                            .child(div().text_base().font_weight(FontWeight::BOLD).text_color(p.text).child("Comments"))
+                            .child(div().text_base().font_weight(FontWeight::BOLD).text_color(p.text).child(t("Comments")))
                             .when_some(count, |d, c| d.child(div().text_sm().text_color(p.text2).child(c))),
                     )
                     .child(icon_button("sh-cm-close", "x", cx).on_click(cx.listener(|t, _, _, cx| {
@@ -559,16 +560,16 @@ impl ShortsPage {
                     }))),
             )
             .when(top_tok.is_some() || new_tok.is_some(), |d| {
-                d.child(div().flex().gap_2().child(sort_chip("sh-cm-top", "Top", top_tok, cx)).child(sort_chip("sh-cm-new", "Newest", new_tok, cx)))
+                d.child(div().flex().gap_2().child(sort_chip("sh-cm-top", t("Top"), top_tok, cx)).child(sort_chip("sh-cm-new", t("Newest"), new_tok, cx)))
             });
         let mut body = div().id("sh-cm-list").flex_1().min_h_0().overflow_y_scroll().px_4().py_3().flex().flex_col().gap_4();
         match &self.comments {
             None | Some(Load::Loading) => body = body.child(div().py_8().flex().justify_center().child(spinner(cx))),
-            Some(Load::Error(e)) => body = body.child(div().text_sm().text_color(p.text2).child(e.clone())),
+            Some(Load::Error(e)) => body = body.child(div().text_sm().text_color(p.text2).child(t(e).to_string())),
             Some(Load::Ready(page)) => {
                 let (list, more) = (page.comments.clone(), page.continuation.clone());
                 if list.is_empty() {
-                    body = body.child(div().text_sm().text_color(p.text2).child("No comments yet."));
+                    body = body.child(div().text_sm().text_color(p.text2).child(t("No comments yet.")));
                 }
                 for c in &list {
                     body = body.child(self.comment_row(c, false, false, cx));
@@ -582,7 +583,7 @@ impl ShortsPage {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(p.link)
                             .cursor_pointer()
-                            .child(if self.comments_more { "Loading…" } else { "Show more comments" })
+                            .child(if self.comments_more { t("Loading…") } else { t("Show more comments") })
                             .on_click(cx.listener(move |t, _, _, cx| t.load_comment_page(tok.clone(), true, cx))),
                     );
                 }
@@ -693,7 +694,7 @@ impl Render for ShortsPage {
         let show_subscribe = yt_layout && st.shorts_show_subscribe;
         let show_dislike = !yt_layout || st.shorts_show_dislike;
         let dislike_btn = show_dislike.then(|| {
-            action("sh-dislike", "thumbs-down", votes.as_ref().map(|v| compact_number(v.dislikes)).unwrap_or_else(|| "Dislike".into()), cx)
+            action("sh-dislike", "thumbs-down", votes.as_ref().map(|v| compact_number(v.dislikes)).unwrap_or_else(|| t("Dislike").into()), cx)
         });
         let yt_info_panel = yt_layout.then(|| {
             let meta = self.meta.get(&v.id);
@@ -838,10 +839,10 @@ impl Render for ShortsPage {
                     .h(h)
                     .gap_4()
                     .pb_4()
-                    .child(action("sh-like", "thumbs-up", votes.as_ref().map(|v| compact_number(v.likes)).unwrap_or_else(|| "Like".into()), cx))
+                    .child(action("sh-like", "thumbs-up", votes.as_ref().map(|v| compact_number(v.likes)).unwrap_or_else(|| t("Like").into()), cx))
                     .when_some(dislike_btn, |d, btn| d.child(btn))
                     .child({
-                        let n = self.meta.get(&v.id).and_then(|w| w.comment_count_text.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Comments".into());
+                        let n = self.meta.get(&v.id).and_then(|w| w.comment_count_text.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| t("Comments").into());
                         action("sh-comments", "message-square", n, cx).on_click(cx.listener(|t, _, _, cx| {
                             if t.show_comments {
                                 t.show_comments = false;
@@ -851,8 +852,8 @@ impl Render for ShortsPage {
                             }
                         }))
                     })
-                    .child(action("sh-share", "share-2", "Share".into(), cx).on_click(move |_, _, cx| copy_to_clipboard(format!("https://youtube.com/shorts/{share_id}"), cx)))
-                    .child(action("sh-watch", "monitor-play", "Full".into(), cx).on_click(move |_, window, cx| {
+                    .child(action("sh-share", "share-2", t("Share").into(), cx).on_click(move |_, _, cx| copy_to_clipboard(format!("https://youtube.com/shorts/{share_id}"), cx)))
+                    .child(action("sh-watch", "monitor-play", t("Open video").into(), cx).on_click(move |_, window, cx| {
                         navigate(Route::Watch { id: watch_id.clone(), playlist: None, start: None }, window, cx)
                     })),
             )
