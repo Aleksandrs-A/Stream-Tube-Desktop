@@ -31,7 +31,8 @@ struct ChannelPage0 {
     tabs: Vec<ChannelTab>,
 }
 
-const WANTED_TABS: &[&str] = &["Home", "Videos", "Shorts", "Live", "Podcasts", "Releases", "Playlists", "Courses", "Shows"];
+/// Tabs shown, by kind (see ChannelTab::kind), so channels work in every content language.
+const WANTED_TABS: &[&str] = &["featured", "videos", "shorts", "streams", "podcasts", "releases", "playlists", "courses", "shows"];
 
 impl ChannelPage {
     pub fn new(id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -73,10 +74,10 @@ impl ChannelPage {
                         let tabs: Vec<ChannelTab> = cp
                             .tabs
                             .into_iter()
-                            .filter(|t| WANTED_TABS.contains(&t.title.as_str()))
-                            .filter(|t| !(store::settings_snapshot().hide_shorts && t.title == "Shorts"))
+                            .filter(|t| WANTED_TABS.contains(&t.kind.as_str()))
+                            .filter(|t| !(store::settings_snapshot().hide_shorts && t.kind == "shorts"))
                             .collect();
-                        this.tab = tabs.iter().position(|t| t.title == "Videos").unwrap_or(0);
+                        this.tab = tabs.iter().position(|t| t.kind == "videos").unwrap_or(0);
                         this.tab_items = Load::Ready(cp.page.items);
                         this.continuation = cp.page.continuation;
                         if store::is_subscribed(&cp.info.id) {
@@ -335,7 +336,7 @@ impl Render for ChannelPage {
                 .child(icon("search").size_4().text_color(p.text2))
                 .child(Input::new(&self.search).appearance(false).cleanable(true)),
         );
-        let tab_title = d.tabs.get(self.tab).map(|t| t.title.clone()).unwrap_or_default();
+        let tab_kind = d.tabs.get(self.tab).map(|t| t.kind.clone()).unwrap_or_default();
         let body: AnyElement = match &self.tab_items {
             Load::Loading => spinner(cx).into_any_element(),
             Load::Error(e) => error_state(e, cx).into_any_element(),
@@ -349,12 +350,12 @@ impl Render for ChannelPage {
                     .collect();
                 if items.is_empty() {
                     empty_state("video-off", "This channel has no content here", "", cx).into_any_element()
-                } else if tab_title == "Shorts" && self.searching.is_none() {
+                } else if tab_kind == "shorts" && self.searching.is_none() {
                     let (_, w) = grid_columns(width, 200.0, window.rem_size());
                     grid(items.iter().filter_map(|i| i.as_video()).map(|v| shorts_card(v, w, cx)).collect(), width).into_any_element()
                 } else {
                     let (_, w) = grid_columns(width, 280.0, window.rem_size());
-                    let mut col = div().flex().flex_col().gap_6().child(grid(items.iter().map(|i| grid_item(i, w, tab_title == "Home" || self.searching.is_some(), cx)).collect(), width));
+                    let mut col = div().flex().flex_col().gap_6().child(grid(items.iter().map(|i| grid_item(i, w, tab_kind == "featured" || self.searching.is_some(), cx)).collect(), width));
                     if self.loading_more {
                         col = col.child(spinner(cx));
                     }

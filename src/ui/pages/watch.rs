@@ -51,6 +51,10 @@ pub struct WatchPage {
     related_more_loading: bool,
     scroll: ScrollHandle,
     local_playlist: Option<(i64, String, Vec<VideoItem>)>,
+    /// the queue list; it opens scrolled to the video playing (each video is a
+    /// new page, so its scroll position isn't kept)
+    queue_scroll: ScrollHandle,
+    queue_scrolled_to: Option<usize>,
     chat: Option<LiveChat>,
     /// repaints the chapters panel when playback moves into another chapter
     chapters_ticker: Option<Task<()>>,
@@ -134,6 +138,8 @@ impl WatchPage {
             related_more_loading: false,
             scroll: ScrollHandle::new(),
             local_playlist,
+            queue_scroll: ScrollHandle::new(),
+            queue_scrolled_to: None,
             chat: None,
             chapters_ticker: None,
             chapters_shown: None,
@@ -434,8 +440,7 @@ impl WatchPage {
                                 // playlist queue
                                 if let Some(wp) = &w.playlist {
                                     if !wp.items.is_empty() {
-                                        p.queue = wp.items.clone();
-                                        p.queue_pos = wp.items.iter().position(|x| x.id == full.id);
+                                        merge_playlist_window(&mut p.queue, &mut p.queue_pos, &wp.items, &full.id);
                                     }
                                 }
                                 cx.notify();
@@ -1290,7 +1295,12 @@ impl WatchPage {
             .and_then(|w| w.playlist.as_ref().map(|p| p.title.clone()))
             .or(self.local_playlist.as_ref().map(|l| l.1.clone()))
             .unwrap_or_else(|| translate("Queue").into());
-        let mut list = div().id("queue-list").flex().flex_col().max_h(px(400.)).overflow_y_scroll();
+        let mut list = div().id("queue-list").flex().flex_col().max_h(px(400.)).overflow_y_scroll().track_scroll(&self.queue_scroll);
+        if let Some(i) = pos.filter(|i| self.queue_scrolled_to != Some(*i)) {
+            self.queue_scrolled_to = Some(i);
+            // a row above the current one stays visible
+            self.queue_scroll.scroll_to_item(i.saturating_sub(1));
+        }
         for (i, v) in queue.iter().enumerate() {
             let plc = pl.clone();
             list = list.child(
@@ -1671,5 +1681,58 @@ mod tests {
         let p = reply_parents(&list);
         // index 3 is already three levels deep, so answers to it sit beside it
         assert_eq!(p, vec![None, Some(0), None, Some(1), None, Some(1), Some(1)]);
+    }
+}
+
+/// YouTube sends only a window of a playlist with each video (about 20 before it
+/// and 80 after). Replacing the queue with that window cut long playlists short
+/// and dropped the rest of a queue, so the window is merged in instead: a queue
+/// that already has this video keeps its order and gains the window's later
+/// videos it lacks, at its end; otherwise the window becomes the queue.
+fn merge_playlist_window(queue: &mut Vec<VideoItem>, pos: &mut Option<usize>, window: &[VideoItem], current: &str) {
+    let Some(at) = queue.iter().position(|v| v.id == current) else {
+        *queue = window.to_vec();
+        *pos = queue.iter().position(|v| v.id == current);
+        return;
+    };
+    *pos = Some(at);
+    let known: std::collections::HashSet<String> = queue.iter().map(|v| v.id.clone()).collect();
+    let later = window.iter().skip_while(|v| v.id != current).skip(1).filter(|v| !known.contains(&v.id)).cloned();
+    queue.extend(later.collect::<Vec<_>>());
+}
+
+#[cfg(test)]
+mod queue_merge_tests {
+    use super::*;
+
+    fn vids(ids: std::ops::Range<u32>) -> Vec<VideoItem> {
+        ids.map(|i| VideoItem { id: i.to_string(), ..Default::default() }).collect()
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_window_extends_a_long_queue() {
+        let mut q = vids(0..300);
+        let mut pos = None;
+        merge_playlist_window(&mut q, &mut pos, &vids(279..378), "299");
+        assert_eq!(pos, Some(299));
+        assert_eq!(q.len(), 378);
+        assert_eq!(q[300].id, "300");
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_window_never_shrinks_the_queue() {
+        let mut q = vids(0..10);
+        let mut pos = None;
+        merge_playlist_window(&mut q, &mut pos, &vids(3..5), "4");
+        assert_eq!((q.len(), pos), (10, Some(4)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_new_playlist_replaces_the_queue() {
+        let mut q = vids(0..10);
+        let mut pos = None;
+        merge_playlist_window(&mut q, &mut pos, &vids(50..60), "55");
+        assert_eq!((q.len(), pos), (10, Some(5)));
+        assert_eq!(q[0].id, "50");
     }
 }

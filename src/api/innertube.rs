@@ -94,6 +94,17 @@ fn walk_items(v: &Value, page: &mut Page) {
                             page.continuation = Some(t);
                         }
                     }
+                    // the newer form (playlists since late 2026):
+                    // { trigger, continuationCommand: { innertubeCommand: { continuationCommand: { token } } } }
+                    "continuationItemViewModel" => {
+                        let mut tokens = Vec::new();
+                        if let Some(cmd) = c.get("continuationCommand") {
+                            find_all(cmd, "token", &mut tokens);
+                        }
+                        if let Some(t) = tokens.iter().find_map(|x| x.as_str()) {
+                            page.continuation = Some(t.to_string());
+                        }
+                    }
                     // Skip noisy sections that duplicate items or are UI chrome.
                     "frameworkUpdates" | "topbar" | "header" | "engagementPanels" | "playerOverlays" | "menu"
                     | "endScreen" | "onResponseReceivedCommands" => {}
@@ -800,7 +811,8 @@ pub fn channel(channel_id: &str, tab_params: Option<&str>) -> Result<ChannelPage
                 }
             }
             if !title.is_empty() {
-                tabs.push(ChannelTab { title, params, selected });
+                let kind = tab_kind(tr, &title);
+                tabs.push(ChannelTab { title, kind, params, selected });
             }
         }
     }
@@ -819,6 +831,19 @@ pub fn channel(channel_id: &str, tab_params: Option<&str>) -> Result<ChannelPage
         }
     }
     Ok(ChannelPage { info, banner, tabs, page })
+}
+
+/// A channel tab's kind from its URL ("/@name/videos" -> "videos"). Titles follow
+/// the content language ("Videolar", "Видео"), so they can't tell tabs apart.
+fn tab_kind(tab: &Value, title: &str) -> String {
+    s(tab, "/endpoint/commandMetadata/webCommandMetadata/url")
+        .and_then(|u| u.split('?').next().and_then(|p| p.rsplit('/').next()).map(str::to_ascii_lowercase))
+        .filter(|k| !k.is_empty() && !k.starts_with('@') && !k.starts_with("uc"))
+        .unwrap_or_else(|| match title {
+            "Home" => "featured".into(),
+            "Live" => "streams".into(),
+            other => other.to_ascii_lowercase(),
+        })
 }
 
 /// Just a channel's avatar, for feeds whose items don't include one.
@@ -1357,7 +1382,7 @@ mod tests {
     fn live_channel_playlist() {
         let c = channel("UCsBjURrPoezykLs9EqgamOA", None).unwrap();
         println!("{:?} tabs={:?}", c.info, c.tabs.iter().map(|t| &t.title).collect::<Vec<_>>());
-        let vt = c.tabs.iter().find(|t| t.title == "Videos").unwrap();
+        let vt = c.tabs.iter().find(|t| t.kind == "videos").unwrap();
         let v = channel("UCsBjURrPoezykLs9EqgamOA", vt.params.as_deref()).unwrap();
         assert!(v.page.items.len() > 10);
         println!("{:#?}", v.page.items[0]);
@@ -1486,6 +1511,52 @@ mod heatmap_tests {
         for id in ["dQw4w9WgXcQ", "kJQP7kiw5Fk", "LXb3EKWsInQ"] {
             let w = super::watch_next(id, None).unwrap();
             println!("{id}: heatmap={} chapters={}", w.heatmap.len(), w.chapters.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod long_playlist_tests {
+    #[test]
+    #[ignore = "network"]
+    fn long_playlists_load_and_watch_next_sends_a_window() {
+        let pid = "UUX6OQ3DkcsbYNE6H8uQQuVA";
+        let mut page = super::playlist(pid).unwrap();
+        let mut vids = page.videos.clone();
+        while vids.len() < 420 {
+            let Some(t) = page.continuation.take() else { break };
+            let p = super::browse_continue(&t).unwrap();
+            vids.extend(p.items.into_iter().filter_map(|i| i.as_video().cloned()));
+            page.continuation = p.continuation;
+        }
+        eprintln!("loaded {}", vids.len());
+        // playlists page past their first 100 videos
+        assert!(vids.len() > 300, "only {} videos", vids.len());
+        for at in [0usize, 150, 298, 350] {
+            let Some(v) = vids.get(at) else { continue };
+            let w = super::watch_next(&v.id, Some(pid)).unwrap();
+            let items = w.playlist.map(|p| p.items).unwrap_or_default();
+            let first = items.first().and_then(|f| vids.iter().position(|x| x.id == f.id));
+            let last = items.last().and_then(|f| vids.iter().position(|x| x.id == f.id));
+            let me = items.iter().position(|x| x.id == v.id);
+            eprintln!("at {at}: window {} items, first={first:?} last={last:?} me={me:?}", items.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod channel_tab_tests {
+    /// Tabs are told apart by kind in any content language.
+    #[test]
+    #[ignore = "network"]
+    fn channel_tabs_have_kinds_in_other_languages() {
+        crate::store::update_settings(|s| s.language = "tr".into());
+        let page = super::channel("UCBJycsmduvYEL83R_U4JriQ", None).unwrap();
+        crate::store::update_settings(|s| s.language = "en".into());
+        let kinds: Vec<_> = page.tabs.iter().map(|t| (t.title.clone(), t.kind.clone())).collect();
+        eprintln!("{kinds:?}");
+        for k in ["featured", "videos", "shorts", "playlists"] {
+            assert!(kinds.iter().any(|(_, kind)| kind == k), "no {k} tab in {kinds:?}");
         }
     }
 }

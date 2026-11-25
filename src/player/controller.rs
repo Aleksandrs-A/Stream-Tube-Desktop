@@ -486,7 +486,9 @@ impl Player {
     pub fn save_progress(&mut self, force: bool) {
         if let Some(v) = &self.video {
             if force || self.time > 0.0 {
-                store::history_progress(&v.id, self.time, self.duration);
+                // the periodic save goes to a background thread; a forced one (switching
+                // videos, the end, quitting) is written before going on
+                store::history_progress_queued(&v.id, self.time, self.duration, force);
                 self.last_progress_save = self.time;
                 crate::api::web::report_progress(&v.id, self.time, !self.paused);
             }

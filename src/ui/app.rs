@@ -386,6 +386,25 @@ pub fn sign_out(cx: &mut App) {
 
 pub fn open_save_dialog(v: VideoItem, window: &mut Window, cx: &mut App) {
     open_dialog(Dialog::SaveToPlaylist(v), window, cx);
+    // signed in: the account's own YouTube playlists are offered too
+    if !crate::api::auth::signed_in() {
+        return;
+    }
+    if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
+        app.update(cx, |a, cx| {
+            a.yt_playlists = None;
+            cx.spawn(async move |this, cx| {
+                let list = blocking(crate::api::auth::my_playlists).await.unwrap_or_default();
+                // Liked videos can't take additions
+                let list: Vec<crate::api::types::PlaylistItem> = list.into_iter().filter(|p| p.id != "LL").collect();
+                let _ = this.update(cx, |a, cx| {
+                    a.yt_playlists = Some(list);
+                    cx.notify();
+                });
+            })
+            .detach();
+        });
+    }
 }
 
 pub fn open_dialog(d: Dialog, window: &mut Window, cx: &mut App) {
@@ -468,6 +487,8 @@ pub struct AppView {
     had_video: bool,
     last_bounds_save: std::time::Instant,
     dialog: Option<Dialog>,
+    /// the signed-in account's playlists for the Save dialog (None while loading)
+    yt_playlists: Option<Vec<crate::api::types::PlaylistItem>>,
     dialog_input: Entity<InputState>,
     focus: FocusHandle,
     pending_watch_sync: Option<String>,
@@ -660,6 +681,7 @@ impl AppView {
             had_video: false,
             last_bounds_save: std::time::Instant::now(),
             dialog: None,
+            yt_playlists: None,
             dialog_input,
             focus,
             pending_watch_sync: None,
@@ -2811,6 +2833,44 @@ impl AppView {
                                 cx.notify();
                             }))
                     }))
+                    .when(crate::api::auth::signed_in(), |d| {
+                        let rows: Vec<AnyElement> = match &self.yt_playlists {
+                            None => vec![div().py_2().px_2().text_sm().text_color(p.text2).child(t("Loading your YouTube playlists…")).into_any_element()],
+                            Some(list) => list
+                                .iter()
+                                .map(|pl| {
+                                    let (pid, name, vid) = (pl.id.clone(), pl.title.clone(), v.id.clone());
+                                    div()
+                                        .id(SharedString::from(format!("dlg-yt-{}", pl.id)))
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .py_2()
+                                        .px_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .hover(move |s| s.bg(p.hover))
+                                        .child(icon("list-plus").text_color(p.text))
+                                        .child(div().flex_1().text_sm().text_color(p.text).truncate().child(pl.title.clone()))
+                                        .child(icon("list-video").size_4().text_color(p.text3))
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            let (pid, name, vid) = (pid.clone(), name.clone(), vid.clone());
+                                            cx.spawn(async move |_, cx| {
+                                                let res = blocking(move || crate::api::auth::add_to_playlist(&pid, &vid)).await;
+                                                cx.update(|cx| match res {
+                                                    Ok(()) => toast(cx, tf!("Saved to playlist “{0}”", name)),
+                                                    Err(_) => toast(cx, t("Couldn't save to that YouTube playlist")),
+                                                });
+                                            })
+                                            .detach();
+                                        }))
+                                        .into_any_element()
+                                })
+                                .collect(),
+                        };
+                        d.child(div().pt_3().pb_1().px_2().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text2).child(t("Your YouTube playlists")))
+                            .children(rows)
+                    })
                     .child(
                         div()
                             .id("dlg-new")
@@ -2830,7 +2890,9 @@ impl AppView {
                                 this.dialog = None;
                                 cx.notify();
                                 let v4 = v3.clone();
-                                cx.defer_in(window, move |_, window, cx| {
+                                // window.defer, not defer_in: prompt_text updates this same
+                                // AppView, which defer_in would still be holding (a crash)
+                                window.defer(cx, move |window, cx| {
                                     prompt_text("New playlist", "Playlist name", window, cx, move |name, _, cx| {
                                         let id = store::playlist_create(&name);
                                         store::playlist_add(id, &v4);
