@@ -761,9 +761,10 @@ fn context_items(player: &Entity<Player>, cx: &App) -> Vec<crate::ui::app::MenuI
     let t = pl.time.max(0.0) as u64;
     let looping = pl.loop_video;
     let stats = pl.show_stats;
+    let can_step = pl.video.is_some() && !pl.loading && !pl.audio_only;
     let (p1, p2, p3, p4) = (player.clone(), player.clone(), player.clone(), player.clone());
     let (id1, id2) = (id.clone(), id);
-    vec![
+    let mut items = vec![
         MenuItem::new("repeat", translate(if looping { "Loop: on" } else { "Loop: off" }), move |_, cx| {
             p1.update(cx, |p, cx| {
                 p.set_loop(!looping);
@@ -785,13 +786,29 @@ fn context_items(player: &Entity<Player>, cx: &App) -> Vec<crate::ui::app::MenuI
                 cx.notify()
             })
         }),
-    ]
-    .into_iter()
-    .chain(std::iter::once(MenuItem::new("pause", translate("Play / pause"), move |_, cx| p4.update(cx, |p, cx| {
-        p.toggle_pause();
-        cx.notify()
-    }))))
-    .collect()
+        MenuItem::new("pause", translate("Play / pause"), move |_, cx| p4.update(cx, |p, cx| {
+            p.toggle_pause();
+            cx.notify()
+        })),
+    ];
+    if can_step {
+        for (forward, icon, label, key) in [
+            (false, "chevron-left", translate("Previous frame"), ','),
+            (true, "chevron-right", translate("Next frame"), '.'),
+        ] {
+            let player = player.clone();
+            items.push(MenuItem::new(icon, format!("{label} ({key})"), move |_, cx| {
+                player.update(cx, |p, cx| {
+                    if !p.paused {
+                        p.set_paused(true);
+                    }
+                    p.frame_step(forward);
+                    cx.notify();
+                });
+            }));
+        }
+    }
+    items
 }
 
 fn navigate_to_current(this: &mut PlayerView, window: &mut Window, cx: &mut Context<PlayerView>) {
