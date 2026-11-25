@@ -6443,6 +6443,8 @@ dependencies = [
  "libloading 0.9.1",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-video",
  "open",
  "parking_lot",
  "rand 0.9.5",

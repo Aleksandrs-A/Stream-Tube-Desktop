@@ -10,6 +10,26 @@ use gpui_kit::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+/// The picture on screen: BGRA bytes GPUI uploads as a texture (software path), or
+/// on macOS's GL path an IOSurface-backed pixel buffer GPUI's `surface()` samples
+/// directly, without the CPU touching pixels.
+#[derive(Clone)]
+pub enum VideoImage {
+    Image(Arc<RenderImage>),
+    #[cfg(target_os = "macos")]
+    Surface(super::mpv::gl_macos::SurfaceFrame),
+}
+
+/// mpv's `hwdec` value. The GL path keeps decoded frames on the GPU; the software
+/// path needs them copied back to memory.
+fn hwdec_option(hwdec: bool, gl: bool) -> &'static str {
+    match (hwdec, gl) {
+        (false, _) => "no",
+        (true, true) => "videotoolbox",
+        (true, false) => "auto-copy",
+    }
+}
+
 pub enum PlayerEvent {
     Ended,
     Loaded,
@@ -38,7 +58,7 @@ pub struct Player {
     pub muted: bool,
     pub speed: f64,
     pub eof: bool,
-    pub frame: Option<Arc<RenderImage>>,
+    pub frame: Option<VideoImage>,
     old_frames: Vec<Arc<RenderImage>>,
     pub video_size: (f64, f64),
     pub segments: Vec<Segment>,
@@ -165,7 +185,10 @@ impl Player {
         let (tx, rx) = futures::channel::mpsc::unbounded::<MpvEvent>();
         let vol = format!("{}", s.volume.round());
         let ua = crate::api::http::BROWSER_UA;
-        let hw = if s.hwdec { "auto-copy" } else { "no" };
+        // macOS with hardware decoding: GPU decode -> GPU render -> GPUI surface, no
+        // pixel copies (STREAMTUBE_NO_GL=1 forces the software path, e.g. to compare)
+        let use_gl = cfg!(target_os = "macos") && s.hwdec && std::env::var_os("STREAMTUBE_NO_GL").is_none();
+        let hw = hwdec_option(s.hwdec, false);
         let opts: Vec<(&str, &str)> = vec![
             ("vo", "libmpv"),
             ("hwdec", hw),
@@ -218,9 +241,38 @@ impl Player {
             opts_owned.push(("log-file".into(), f));
         }
         let refs: Vec<(&str, &str)> = opts_owned.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-        match Mpv::new(&refs, move |ev| {
-            let _ = tx.unbounded_send(ev);
-        }) {
+        let sink = |tx: futures::channel::mpsc::UnboundedSender<MpvEvent>| {
+            move |ev| {
+                let _ = tx.unbounded_send(ev);
+            }
+        };
+        #[cfg(target_os = "macos")]
+        let gl_player = if use_gl {
+            // gpu-dumb-mode: one shader pass straight to the target; mpv's full GL
+            // pipeline costs about 1 ms more CPU a frame through Apple's GL driver
+            let mut gl_opts: Vec<(&str, &str)> = refs.iter().filter(|(k, _)| *k != "hwdec").copied().collect();
+            gl_opts.push(("hwdec", hwdec_option(true, true)));
+            gl_opts.push(("gpu-dumb-mode", "yes"));
+            match Mpv::new_gl(&gl_opts, sink(tx.clone())) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    eprintln!("[player] GPU video path unavailable ({e}), using the software path");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "macos"))]
+        let gl_player: Option<Arc<Mpv>> = {
+            let _ = use_gl;
+            None
+        };
+        let created = match gl_player {
+            Some(m) => Ok(m),
+            None => Mpv::new(&refs, sink(tx)),
+        };
+        match created {
             Ok(m) => {
                 self.mpv = Some(m.clone());
                 cx.spawn(async move |this, cx| {
@@ -254,6 +306,21 @@ impl Player {
         }
     }
 
+    /// Drops the picture on screen (and its texture on the software path).
+    fn clear_frame(&mut self, cx: &mut Context<Self>) {
+        if let Some(VideoImage::Image(old)) = self.frame.take() {
+            cx.drop_image(old, None);
+        }
+    }
+
+    fn set_ambient(&mut self, c: Rgba, cx: &mut Context<Self>) {
+        let changed = self.ambient.map(|o| (o.r - c.r).abs() + (o.g - c.g).abs() + (o.b - c.b).abs() > 0.04).unwrap_or(true);
+        if changed {
+            self.ambient = Some(c);
+            cx.emit(PlayerEvent::Ambient);
+        }
+    }
+
     pub fn mpv(&self) -> Option<Arc<Mpv>> {
         self.mpv.clone()
     }
@@ -264,21 +331,33 @@ impl Player {
                 let t0 = std::time::Instant::now();
                 crate::perf::add(&crate::perf::UI_FRAMES, 1);
                 let _g = scopeguard(move || crate::perf::add(&crate::perf::UI_HANDLE_US, t0.elapsed().as_micros() as u64));
-                if let Some(m) = &self.mpv {
+                if let Some(m) = self.mpv.clone() {
                     if let Some(f) = m.take_frame() {
                         self.ambient_tick += 1;
-                        if self.ambient_tick % 12 == 1 && store::settings_snapshot().ambient_mode {
-                            if let Some(c) = average_color(&f.data, f.width, f.height) {
-                                let changed = self.ambient.map(|o| (o.r - c.r).abs() + (o.g - c.g).abs() + (o.b - c.b).abs() > 0.04).unwrap_or(true);
-                                if changed {
-                                    self.ambient = Some(c);
-                                    cx.emit(PlayerEvent::Ambient);
+                        let ambient = self.ambient_tick % 12 == 1 && store::settings_snapshot().ambient_mode;
+                        #[cfg(target_os = "macos")]
+                        if let Some(s) = f.surface {
+                            // GL path: GPUI draws the pixel buffer itself; the ambient colour
+                            // reads ~200 pixels straight from the IOSurface
+                            if ambient {
+                                if let Some(c) = s.sample_grid(16, 12).and_then(|px| average_rgb(&px)) {
+                                    self.set_ambient(c, cx);
                                 }
+                            }
+                            if let Some(VideoImage::Image(old)) = self.frame.replace(VideoImage::Surface(s)) {
+                                cx.drop_image(old, None);
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        if ambient {
+                            if let Some(c) = average_color(&f.data, f.width, f.height) {
+                                self.set_ambient(c, cx);
                             }
                         }
                         if let Some(buf) = image::RgbaImage::from_raw(f.width, f.height, f.data) {
                             let img = Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(buf)]));
-                            if let Some(old) = self.frame.replace(img) {
+                            if let Some(VideoImage::Image(old)) = self.frame.replace(VideoImage::Image(img)) {
                                 self.old_frames.push(old);
                             }
                             // drop textures of frames that are no longer displayed
@@ -526,9 +605,7 @@ impl Player {
         self.ambient = None;
         self.channel_id = video.channel_id.clone();
         self.audio_track = None;
-        if let Some(old) = self.frame.take() {
-            cx.drop_image(old, None);
-        }
+        self.clear_frame(cx);
         let _ = mpv.command(&["stop"]);
         store::history_add(&video);
         // with the browser sign-in, the video goes into the account's YouTube history
@@ -763,7 +840,7 @@ impl Player {
         let s = store::settings_snapshot();
         self.loop_video = s.loop_video;
         if let Some(m) = &self.mpv {
-            m.set("hwdec", if s.hwdec { "auto-copy" } else { "no" });
+            m.set("hwdec", hwdec_option(s.hwdec, m.gl_renderer().is_some()));
         }
         self.apply_caption_style();
         if self.video.is_some() {
@@ -871,9 +948,7 @@ impl Player {
     pub fn set_audio_only(&mut self, on: bool, cx: &mut Context<Self>) {
         self.audio_only = on;
         store::update_settings(|s| s.audio_only = on);
-        if let Some(old) = self.frame.take() {
-            cx.drop_image(old, None);
-        }
+        self.clear_frame(cx);
         let t = self.time;
         self.load_current(Some(t), true, cx);
     }
@@ -932,6 +1007,7 @@ impl Player {
             }
             let hw = st("hwdec-current").filter(|s| s != "no").unwrap_or_else(|| translate("off (software)").into());
             out.push(("Hardware decoding", hw));
+            out.push(("Rendering", translate(if m.gl_renderer().is_some() { "GPU, zero-copy (OpenGL → IOSurface)" } else { "CPU (software)" }).into()));
             let color = [st("video-params/colormatrix"), st("video-params/primaries"), st("video-params/gamma")].into_iter().flatten().collect::<Vec<_>>();
             if !color.is_empty() {
                 out.push(("Color", color.join(" / ")));
@@ -1095,9 +1171,7 @@ impl Player {
         self.loading = false;
         self.queue.clear();
         self.queue_pos = None;
-        if let Some(old) = self.frame.take() {
-            cx.drop_image(old, None);
-        }
+        self.clear_frame(cx);
         cx.notify();
     }
 
@@ -1144,20 +1218,31 @@ fn average_color(data: &[u8], w: u32, h: u32) -> Option<Rgba> {
     if w < 4 || h < 4 || data.len() < (w * h * 4) as usize {
         return None;
     }
-    let (mut r, mut g, mut b, mut n) = (0u64, 0u64, 0u64, 0u64);
+    let mut px = Vec::with_capacity(16 * 12);
     for gy in 0..12 {
         for gx in 0..16 {
             let x = (w - 1) * gx / 15;
             let y = (h - 1) * gy / 11;
             let i = ((y * w + x) * 4) as usize;
-            b += data[i] as u64;
-            g += data[i + 1] as u64;
-            r += data[i + 2] as u64;
-            n += 1;
+            px.push([data[i + 2], data[i + 1], data[i]]);
         }
     }
-    let f = |v: u64| ((v as f32 / n as f32) / 255.0 * 1.25).min(1.0);
-    Some(Rgba { r: f(r), g: f(g), b: f(b), a: 1.0 })
+    average_rgb(&px)
+}
+
+/// Average of RGB samples, slightly brightened (see `average_color`).
+fn average_rgb(px: &[[u8; 3]]) -> Option<Rgba> {
+    if px.is_empty() {
+        return None;
+    }
+    let mut sum = [0u64; 3];
+    for p in px {
+        for c in 0..3 {
+            sum[c] += p[c] as u64;
+        }
+    }
+    let f = |v: u64| ((v as f32 / px.len() as f32) / 255.0 * 1.25).min(1.0);
+    Some(Rgba { r: f(sum[0]), g: f(sum[1]), b: f(sum[2]), a: 1.0 })
 }
 
 fn strip_orig_suffix(code: &str) -> &str {

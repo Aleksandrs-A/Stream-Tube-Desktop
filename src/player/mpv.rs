@@ -1,6 +1,10 @@
-//! Minimal dynamic binding to libmpv (client API + software render API).
+//! Minimal dynamic binding to libmpv (client API + software render API, and on
+//! macOS the OpenGL render API for the GPU video path in `gl_macos`).
 //! The platform's libmpv is loaded at runtime.
 #![allow(non_camel_case_types)]
+#[cfg(target_os = "macos")]
+#[path = "gl_macos.rs"]
+pub mod gl_macos;
 use anyhow::{Result, anyhow};
 use libloading::Library;
 use parking_lot::{Condvar, Mutex};
@@ -49,12 +53,34 @@ const EV_PROPERTY_CHANGE: c_int = 22;
 const EV_PLAYBACK_RESTART: c_int = 21;
 
 const RP_API_TYPE: c_int = 1;
+#[cfg(target_os = "macos")]
+const RP_OPENGL_INIT_PARAMS: c_int = 2;
+#[cfg(target_os = "macos")]
+const RP_OPENGL_FBO: c_int = 3;
+#[cfg(target_os = "macos")]
+const RP_FLIP_Y: c_int = 4;
 const RP_BLOCK_FOR_TARGET_TIME: c_int = 12;
 const RP_SW_SIZE: c_int = 17;
 const RP_SW_FORMAT: c_int = 18;
 const RP_SW_STRIDE: c_int = 19;
 const RP_SW_POINTER: c_int = 20;
 const RENDER_UPDATE_FRAME: u64 = 1;
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct mpv_opengl_init_params {
+    get_proc_address: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void>,
+    get_proc_address_ctx: *mut c_void,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct mpv_opengl_fbo {
+    fbo: c_int,
+    w: c_int,
+    h: c_int,
+    internal_format: c_int,
+}
 
 struct Fns {
     create: unsafe extern "C" fn() -> *mut mpv_handle,
@@ -274,8 +300,12 @@ unsafe impl Send for RenderCtx {}
 pub struct VideoFrame {
     pub width: u32,
     pub height: u32,
+    /// BGRA pixels; empty on the GL path
     pub data: Vec<u8>,
     pub serial: u64,
+    /// GL path: the frame as an IOSurface-backed 420f pixel buffer for GPUI's `surface()`
+    #[cfg(target_os = "macos")]
+    pub surface: Option<gl_macos::SurfaceFrame>,
 }
 
 struct RenderShared {
@@ -292,6 +322,8 @@ pub struct Mpv {
     h: Arc<Handle>,
     render: Arc<RenderShared>,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    /// GL path only: the GL renderer in use
+    gl: Option<String>,
 }
 
 unsafe extern "C" fn on_render_update(ctx: *mut c_void) {
@@ -308,6 +340,24 @@ struct Block([u8; 64]);
 impl Mpv {
     /// Creates a player. `events` receives property changes and frame notifications.
     pub fn new(options: &[(&str, &str)], events: impl Fn(MpvEvent) + Send + Sync + 'static) -> Result<Arc<Self>> {
+        Self::create(options, false, events)
+    }
+
+    /// Like `new`, but renders through mpv's OpenGL API in an offscreen CGL context
+    /// and hands frames over as IOSurface-backed pixel buffers (`VideoFrame::surface`)
+    /// instead of bytes. Pair with `hwdec=videotoolbox` so decoded frames stay on the GPU.
+    /// Fails, leaving nothing running, when no usable GL or mpv render context exists.
+    #[cfg(target_os = "macos")]
+    pub fn new_gl(options: &[(&str, &str)], events: impl Fn(MpvEvent) + Send + Sync + 'static) -> Result<Arc<Self>> {
+        Self::create(options, true, events)
+    }
+
+    /// `Some(renderer description)` when frames come from the GL path.
+    pub fn gl_renderer(&self) -> Option<&str> {
+        self.gl.as_deref()
+    }
+
+    fn create(options: &[(&str, &str)], gl: bool, events: impl Fn(MpvEvent) + Send + Sync + 'static) -> Result<Arc<Self>> {
         let (_, f) = lib()?;
         let events = Arc::new(events);
         unsafe {
@@ -337,22 +387,43 @@ impl Mpv {
                 stop: AtomicBool::new(false),
                 force: AtomicBool::new(false),
             });
-            // render context
-            let api = CString::new("sw")?;
-            let mut params = [
-                mpv_render_param { kind: RP_API_TYPE, data: api.as_ptr() as *mut c_void },
-                mpv_render_param { kind: 0, data: std::ptr::null_mut() },
-            ];
-            let mut rctx: *mut mpv_render_context = std::ptr::null_mut();
-            let rc = (f.rc_create)(&mut rctx, h, params.as_mut_ptr());
-            if rc < 0 {
-                (f.terminate_destroy)(h);
-                return Err(anyhow!("render context: {}", err_str(rc)));
-            }
-            (f.rc_set_update_callback)(rctx, Some(on_render_update), Arc::as_ptr(&render) as *mut c_void);
-
             let handle = Arc::new(Handle(h));
-            let mpv = Arc::new(Mpv { h: handle.clone(), render: render.clone(), threads: Mutex::new(Vec::new()) });
+            // GL path: its render thread creates the GL and mpv render contexts itself
+            #[cfg(target_os = "macos")]
+            let gl_render = if gl {
+                match spawn_gl_render(handle.clone(), render.clone(), events.clone()) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        (f.terminate_destroy)(h);
+                        return Err(e);
+                    }
+                }
+            } else {
+                None
+            };
+            #[cfg(not(target_os = "macos"))]
+            let gl_render: Option<(std::thread::JoinHandle<()>, String)> = {
+                let _ = gl;
+                None
+            };
+            // render context
+            let mut rctx: *mut mpv_render_context = std::ptr::null_mut();
+            if gl_render.is_none() {
+                let api = CString::new("sw")?;
+                let mut params = [
+                    mpv_render_param { kind: RP_API_TYPE, data: api.as_ptr() as *mut c_void },
+                    mpv_render_param { kind: 0, data: std::ptr::null_mut() },
+                ];
+                let rc = (f.rc_create)(&mut rctx, h, params.as_mut_ptr());
+                if rc < 0 {
+                    (f.terminate_destroy)(h);
+                    return Err(anyhow!("render context: {}", err_str(rc)));
+                }
+                (f.rc_set_update_callback)(rctx, Some(on_render_update), Arc::as_ptr(&render) as *mut c_void);
+            }
+
+            let gl_desc = gl_render.as_ref().map(|(_, desc)| desc.clone());
+            let mpv = Arc::new(Mpv { h: handle.clone(), render: render.clone(), threads: Mutex::new(Vec::new()), gl: gl_desc });
 
             // event thread
             let ev_handle = handle.clone();
@@ -424,6 +495,11 @@ impl Mpv {
                 #[cfg(windows)]
                 set_playback_awake(false, false);
             })?;
+            if let Some((t2, _)) = gl_render {
+                // Drop expects the event thread first
+                mpv.threads.lock().extend([t1, t2]);
+                return Ok(mpv);
+            }
 
             // render thread
             let r = render.clone();
@@ -499,7 +575,14 @@ impl Mpv {
                     // SAFETY: the loop above wrote all `bytes` bytes (bytes is w*h*4, src has w*h pixels)
                     data.set_len(bytes);
                     let serial = r.serial.fetch_add(1, Ordering::Relaxed) + 1;
-                    *r.frame.lock() = Some(VideoFrame { width: w, height: h, data, serial });
+                    *r.frame.lock() = Some(VideoFrame {
+                        width: w,
+                        height: h,
+                        data,
+                        serial,
+                        #[cfg(target_os = "macos")]
+                        surface: None,
+                    });
                     frame_cb(MpvEvent::Frame);
                 }
                 (f.rc_free)(rc_ptr.0);
@@ -649,6 +732,79 @@ mod tests {
         assert_eq!(decoder.as_deref(), Some("videotoolbox-copy"));
     }
 
+    /// The GL path the player uses on macOS: frames arrive as 420f surfaces at the
+    /// requested size (also tiny ones), a buffer the UI still holds is never handed
+    /// out again, pausing keeps redraws working, and mpv's own screenshots still work.
+    #[test]
+    #[ignore = "requires VideoToolbox, macOS libmpv and a local video in STREAMTUBE_MPV_TEST_VIDEO"]
+    fn gl_path_without_a_window() {
+        let path = std::env::var("STREAMTUBE_MPV_TEST_VIDEO").expect("set a path to a local video");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let player = Mpv::new_gl(
+            &[
+                ("vo", "libmpv"),
+                ("ao", "null"),
+                ("hwdec", "videotoolbox"),
+                ("gpu-dumb-mode", "yes"),
+                ("config", "no"),
+                ("osc", "no"),
+                ("keep-open", "yes"),
+            ],
+            move |event| {
+                let _ = tx.send(event);
+            },
+        )
+        .expect("GL path");
+        eprintln!("GL renderer: {}", player.gl_renderer().unwrap_or("?"));
+        // the next frame of the given size, as the UI would take it
+        let next = |w: u32, h: u32| -> super::gl_macos::SurfaceFrame {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if let Ok(MpvEvent::Frame) = rx.recv_timeout(Duration::from_secs(5)) {
+                    if let Some(f) = player.take_frame() {
+                        assert!(f.data.is_empty(), "no bytes on the GL path");
+                        let s = f.surface.expect("GL frames carry a surface");
+                        if (f.width, f.height) == (w, h) {
+                            return s;
+                        }
+                    }
+                }
+            }
+            panic!("no {w}x{h} frame");
+        };
+        player.set_render_size(1280, 720);
+        player.command_sync(&["loadfile", &path]).unwrap();
+        // the UI keeps the displayed frame, GPUI may still be drawing the one before it
+        let mut held: Vec<super::gl_macos::SurfaceFrame> = Vec::new();
+        for _ in 0..120 {
+            let s = next(1280, 720);
+            assert!(!held.contains(&s), "a buffer still in use was rewritten");
+            held.push(s);
+            if held.len() > 2 {
+                held.remove(0);
+            }
+        }
+        assert_eq!(player.get_string("hwdec-current").as_deref(), Some("videotoolbox"));
+        // a tiny size, then back
+        player.set_render_size(16, 16);
+        next(16, 16);
+        player.set_render_size(1280, 720);
+        let s = next(1280, 720);
+        let px = s.sample_grid(16, 12).expect("sample the surface");
+        assert!(px.iter().any(|p| p.iter().any(|&v| v > 32)), "frame is not black");
+        // paused: a size change still redraws the current frame
+        player.set("pause", "yes");
+        std::thread::sleep(Duration::from_millis(300));
+        player.set_render_size(640, 360);
+        next(640, 360);
+        // mpv's screenshot of the decoded video works without frame bytes
+        let shot = std::env::temp_dir().join(format!("streamtube-gl-shot-{}.png", std::process::id()));
+        player.command_sync(&["screenshot-to-file", &shot.to_string_lossy(), "video"]).unwrap();
+        let len = std::fs::metadata(&shot).map(|m| m.len()).unwrap_or(0);
+        let _ = std::fs::remove_file(&shot);
+        assert!(len > 1000, "screenshot written");
+    }
+
     fn render_local_video(hwdec: &str) -> Option<String> {
         let path = std::env::var("STREAMTUBE_MPV_TEST_VIDEO").expect("set a path to a local video");
         let (tx, rx) = std::sync::mpsc::channel();
@@ -678,6 +834,117 @@ mod tests {
                 Ok(_) => {}
                 Err(_) => panic!("mpv did not render a video frame"),
             }
+        }
+    }
+}
+
+/// Spawns the GL render thread: it owns an offscreen CGL context and the mpv render
+/// context, renders each frame into an FBO, converts it to an IOSurface-backed 420f
+/// pixel buffer and hands that over. Returns once the contexts exist (or failed).
+#[cfg(target_os = "macos")]
+fn spawn_gl_render<E: Fn(MpvEvent) + Send + Sync + 'static>(
+    handle: Arc<Handle>,
+    r: Arc<RenderShared>,
+    frame_cb: Arc<E>,
+) -> Result<(std::thread::JoinHandle<()>, String)> {
+    let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<std::result::Result<String, String>>(1);
+    let t = std::thread::Builder::new().name("mpv-render-gl".into()).spawn(move || unsafe {
+        let (_, f) = lib().unwrap();
+        let mut gl = match gl_macos::GlRenderer::new() {
+            Ok(g) => g,
+            Err(e) => {
+                let _ = init_tx.send(Err(format!("OpenGL: {e}")));
+                return;
+            }
+        };
+        let api = c"opengl";
+        let mut init = mpv_opengl_init_params { get_proc_address: Some(gl_macos::get_proc_address), get_proc_address_ctx: std::ptr::null_mut() };
+        let mut params = [
+            mpv_render_param { kind: RP_API_TYPE, data: api.as_ptr() as *mut c_void },
+            mpv_render_param { kind: RP_OPENGL_INIT_PARAMS, data: &mut init as *mut _ as *mut c_void },
+            mpv_render_param { kind: 0, data: std::ptr::null_mut() },
+        ];
+        let mut rctx: *mut mpv_render_context = std::ptr::null_mut();
+        let rc = (f.rc_create)(&mut rctx, handle.0, params.as_mut_ptr());
+        if rc < 0 {
+            let _ = init_tx.send(Err(format!("GL render context: {}", err_str(rc))));
+            return;
+        }
+        (f.rc_set_update_callback)(rctx, Some(on_render_update), Arc::as_ptr(&r) as *mut c_void);
+        let _ = init_tx.send(Ok(gl.description.clone()));
+        let mut warned = false;
+        loop {
+            {
+                let mut w = r.wake.lock();
+                while !*w && !r.stop.load(Ordering::Relaxed) {
+                    r.cv.wait(&mut w);
+                }
+                *w = false;
+            }
+            if r.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let flags = (f.rc_update)(rctx);
+            let forced = r.force.swap(false, Ordering::Relaxed);
+            if flags & RENDER_UPDATE_FRAME == 0 && !forced {
+                continue;
+            }
+            // 4:2:0 needs even dimensions
+            let (tw, th) = *r.target.lock();
+            let (w, h) = ((tw.max(16) + 1) & !1, (th.max(16) + 1) & !1);
+            let t0 = std::time::Instant::now();
+            let (fbo, format) = match gl.target(w, h) {
+                Ok(v) => v,
+                Err(e) => {
+                    if !warned {
+                        warned = true;
+                        eprintln!("[mpv-gl] {e}");
+                    }
+                    continue;
+                }
+            };
+            let mut target = mpv_opengl_fbo { fbo: fbo as c_int, w: w as c_int, h: h as c_int, internal_format: format as c_int };
+            let mut flip: c_int = 0;
+            let mut no_block: c_int = 0;
+            let mut params = [
+                mpv_render_param { kind: RP_OPENGL_FBO, data: &mut target as *mut _ as *mut c_void },
+                mpv_render_param { kind: RP_FLIP_Y, data: &mut flip as *mut c_int as *mut c_void },
+                mpv_render_param { kind: RP_BLOCK_FOR_TARGET_TIME, data: &mut no_block as *mut c_int as *mut c_void },
+                mpv_render_param { kind: 0, data: std::ptr::null_mut() },
+            ];
+            let rc = (f.rc_render)(rctx, params.as_mut_ptr());
+            if rc < 0 {
+                continue;
+            }
+            let surface = match gl.convert() {
+                Ok(s) => s,
+                Err(e) => {
+                    if !warned {
+                        warned = true;
+                        eprintln!("[mpv-gl] {e}");
+                    }
+                    continue;
+                }
+            };
+            crate::perf::add(&crate::perf::MPV_RENDER_US, t0.elapsed().as_micros() as u64);
+            crate::perf::add(&crate::perf::MPV_FRAMES, 1);
+            let serial = r.serial.fetch_add(1, Ordering::Relaxed) + 1;
+            *r.frame.lock() = Some(VideoFrame { width: w, height: h, data: Vec::new(), serial, surface: Some(surface) });
+            frame_cb(MpvEvent::Frame);
+        }
+        // the GL context is still current on this thread, as mpv requires
+        (f.rc_free)(rctx);
+        drop(gl);
+    })?;
+    match init_rx.recv() {
+        Ok(Ok(desc)) => Ok((t, desc)),
+        Ok(Err(e)) => {
+            let _ = t.join();
+            Err(anyhow!(e))
+        }
+        Err(_) => {
+            let _ = t.join();
+            Err(anyhow!("GL render thread exited"))
         }
     }
 }
